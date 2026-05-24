@@ -107,3 +107,113 @@ PDF・テキスト・HTML・CSV など多岐にわたる
 
 - 2025年3月にGAになりスーパーバイザー型の分業構成が可能
 - まずシングルエージェントで検証し、段階的に拡張するのが推奨
+
+---
+
+## Amazon Q Developer カスタマイズ（AIP-23）
+
+### Amazon Q Developer とは
+
+IDE（VS Code / JetBrains 等）に統合されるAIコーディングアシスタント。
+
+| ティア | 特徴 |
+|---|---|
+| Q Developer（Free） | 個人利用。汎用的な提案 |
+| **Q Developer Pro** | 組織管理・ユーザー割り当て・**カスタマイズ機能**が使える |
+
+### カスタマイズ（Customization）機能
+
+**社内のコードリポジトリをデータソースとして読み込み、Q Developer の提案をカスタマイズする機能。**
+
+```
+管理者が設定するもの
+  ├─ データソース：社内フレームワーク / コーディング規約 / ユーティリティライブラリの Git リポジトリ
+  ├─ カスタマイズを割り当てるチーム（Pro ユーザー単位）
+  └─ プロジェクトリポジトリ自体は変更不要
+         ↓
+開発者が IDE で使うとき
+  → Q Developer の提案に社内規約・フレームワークが反映されたコードが出てくる
+```
+
+### キーポイント（試験判断軸）
+
+| 要件 | 判断 |
+|---|---|
+| 「各プロジェクトのリポジトリ構成を変更しない」 | カスタマイズ機能のみ対応（.amazonq ディレクトリ追加はリポジトリ変更になる） |
+| 「全エンジニアへのサービス側からの一元設定」 | Pro ティアのカスタマイズ機能で管理者が一括設定・割り当て |
+| 「社内資産を反映させたい」 | カスタマイズのデータソースに社内リポジトリを指定 |
+
+### 不正解パターン（AIP-23）
+
+| 選択肢 | 不正解の理由 |
+|---|---|
+| `.amazonq` ディレクトリにコンテキストファイルを配置 | **各プロジェクトリポジトリに変更が必要**。要件「リポジトリ構成を変更しない」に反する |
+| Amazon Kendra + Amazon Q Business | Q Business は社内チャットボット。Q Developer（コーディング支援）とは別製品 |
+| CodeCommit サブモジュールとして各開発者がクローン | 各リポジトリにサブモジュール設定が必要 → リポジトリ構成の変更 |
+
+### Amazon Q Developer vs Amazon Q Business（混同注意）
+
+| | Amazon Q Developer | Amazon Q Business |
+|---|---|---|
+| 用途 | **コーディング支援**（IDE に統合） | **社内チャットボット**（ドキュメント検索・Q&A） |
+| データソース | コードリポジトリ | Confluence・SharePoint・S3 等のドキュメント |
+| 統合先 | IDE（VS Code / JetBrains 等） | Web UI / Slack / Teams |
+
+---
+
+## Lambda Function URL と MCP サーバー（AIP-25）
+
+### Model Context Protocol（MCP）とは
+
+AI エージェントがツール（外部 API・データソース等）を呼び出すための**標準プロトコル**。
+MCP サーバーは HTTPS エンドポイントとして公開し、クライアント（AI エージェント）がツールを呼び出す。
+
+### Lambda Function URL とは
+
+Lambda 関数に**直接 HTTPS エンドポイントを付与する機能**。API Gateway 等の追加サービス不要。
+
+```
+Lambda 関数
+  ↓ Function URL を有効化（設定1回のみ）
+https://xxxx.lambda-url.ap-northeast-1.on.aws/
+  ← 直接 HTTPS で呼び出せる
+```
+
+### AIP-25 正解構成：Lambda Function URL（レスポンスストリーミング + AWS_IAM 認証）
+
+```
+MCP クライアント（AI エージェント）
+  ↓ SigV4 署名付きリクエスト
+Lambda Function URL
+  ├─ auth_type: AWS_IAM（SigV4 署名を検証）
+  └─ invoke_mode: RESPONSE_STREAM（ストリーマブル HTTP）
+  ↓
+Lambda 関数（MCP サーバーのロジック）
+  ↓ ストリーミングレスポンス
+クライアントに逐次返却
+```
+
+### 各設定項目の意味
+
+| 設定 | 値 | 意味 |
+|---|---|---|
+| 認証タイプ | `AWS_IAM` | 呼び出し元に SigV4 署名を要求。IAM ポリシーで `lambda:InvokeFunctionUrl` 権限を付与 |
+| 呼び出しモード | `RESPONSE_STREAM` | レスポンスを逐次ストリーミング。ストリーマブル HTTP に対応 |
+| 外部パートナーのアクセス | クロスアカウント IAM ロール + `lambda:InvokeFunctionUrl` 権限 | 追加サービス不要で外部からの強固な認証を実現 |
+
+### 不正解パターン（AIP-25）
+
+| 選択肢 | 不正解の理由 |
+|---|---|
+| API Gateway HTTP API + Cognito オーソライザー | API Gateway は追加の管理コンポーネント。「管理コンポーネントを最小限に」に反する |
+| CloudFront + Lambda@Edge + 署名付き URL | CloudFront ディストリビューション・キーペア管理が必要。「最小限のインフラ」に反する |
+| SDK の Lambda Invoke API でカスタムトランスポート | HTTP トランスポートではなく SDK 呼び出し。「ストリーマブル HTTP トランスポート」要件を満たさない |
+
+### Lambda Function URL vs API Gateway（試験での使い分け）
+
+| 観点 | Lambda Function URL | API Gateway |
+|---|---|---|
+| 管理コンポーネント数 | **少ない**（Lambda だけ） | 多い（API Gateway + Lambda） |
+| レスポンスストリーミング | **対応**（RESPONSE_STREAM モード） | HTTP API のみ対応（REST は非対応） |
+| 認証 | AWS_IAM または NONE | Lambda オーソライザー / Cognito / IAM |
+| 用途 | 単純な HTTP エンドポイント・MCPサーバー | 高度なルーティング・複数Lambda統合・スロットリング |
