@@ -4,7 +4,8 @@
 
 ## コンテンツ
 
-- **[AWS_MLA/](./AWS_MLA/)** — AWS Certified Machine Learning Engineer – Associate（MLA-C01）学習ノート
+- **[aws/mla/](./aws/mla/)** — AWS Certified Machine Learning Engineer – Associate（MLA-C01）学習ノート
+- **[aws/aip/](./aws/aip/)** — AWS Certified AI Practitioner（AIP-C01）学習ノート
 
 ## 方針
 
