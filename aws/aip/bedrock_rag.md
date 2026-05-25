@@ -574,3 +574,100 @@ RAG（セマンティックチャンキング）を使う意味
 - 「意味のまとまりを保ちたい」「ハルシネーション削減」「高精度な要約」→ **セマンティックチャンキング**
 - 「概要と詳細の両方を検索に活かしたい」→ **階層的チャンキング**
 - 「シンプルに実装したい」→ **固定サイズチャンキング**（ただし文脈切断リスクあり）
+
+---
+
+## ⚠️ Bedrock は埋め込み（ベクトル化）もできる（AIP-32 不正解ポイント）
+
+### Bedrock の埋め込みモデル
+
+```
+Amazon Bedrock = 生成AIだけでなく、埋め込み（Embedding）生成もできる
+
+主な埋め込みモデル
+  Amazon Titan Embeddings V2        ← AWS純正
+  Cohere Embed（英語 / 多言語）      ← 多言語対応
+
+呼び出し方：InvokeModel API（生成と同じ）
+  → テキスト → float配列（ベクトル）が返ってくる
+  → モデルのホスティング・GPU・管理は一切不要
+```
+
+### HuggingFace とは（混同注意）
+
+```
+HuggingFace（ハギングフェイス）
+  = AIモデルの GitHub 的なプラットフォーム＋Pythonライブラリ群
+
+  ① Hub       → 数十万のAIモデルが公開（BERT / LLaMA / Stable Diffusion etc.）
+  ② transformers ライブラリ → Hubのモデルを Python で使うためのライブラリ
+  ③ sentence-transformers  → テキスト→ベクトル変換に特化したライブラリ
+```
+
+```python
+# 使い方のイメージ
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('all-MiniLM-L6-v2')  # Hub からモデルをDL
+vector = model.encode("こんにちは")               # → float配列（ベクトル）
+```
+
+ローカル・研究環境では便利だが、**モデルを自分の環境で動かす**設計。
+
+### HuggingFace を Glue で動かすと不正解になる理由
+
+| 問題点 | 内容 |
+|---|---|
+| GPU サポート | Glue（Apache Spark基盤）はGPUサポートに制約あり → 推論が遅い |
+| モデル管理 | 数百MB〜数GBのモデルファイルのキャッシュ・ライブラリ依存関係を自前管理 |
+| 運用負荷 | 「運用負荷最小」要件に反する |
+| コスト | Bedrock API より高くなるケースがある |
+
+| | HuggingFace（自前実行） | Bedrock 埋め込み API |
+|---|---|---|
+| 実態 | モデルを自分の環境で実行 | API を叩くだけ |
+| 管理 | モデル・GPU・ライブラリを自前管理 | AWS 任せ |
+| 向いている場面 | ローカル開発・研究・カスタム学習 | 本番・サーバーレス構成 |
+| AIP 試験での扱い | 「運用負荷が高い」**不正解パターン** | **正解パターン** |
+
+→ 試験で HuggingFace が選択肢に出てきたら**ほぼ不正解**。  
+→ 埋め込みが必要なら **Bedrock の InvokeModel を呼ぶだけ**が最もシンプル。
+
+### AIP-32 の正解構成（RAG取り込みパイプライン・サーバーレス）
+
+```
+S3（約40GB の JSON）
+  ↓
+Step Functions Distributed Map（最大10,000並列でS3ファイルを処理）
+  ↓ 各ファイルに対して
+Comprehend DetectPiiEntities API → PIIをマスク（コード不要）
+  ↓
+Bedrock InvokeModel（Titan Embeddings V2）→ ベクトル化
+  ↓
+OpenSearch Serverless（ベクトル格納・k-NN検索）
+```
+
+全工程がマネージドAPIの呼び出しのみ → 自前コードほぼゼロ。
+
+### サーバーレス要件でのストレージ選定
+
+| サービス | サーバーレス? | 備考 |
+|---|---|---|
+| **OpenSearch Serverless** | ◯ | OCU自動スケール、クラスター管理不要 |
+| OpenSearch Service（マネージドクラスター） | ✗ | ノード数・インスタンスタイプの選定・管理が必要 |
+| RDS for PostgreSQL（pgvector） | ✗ | インスタンス管理・パッチ適用が必要 |
+| DocumentDB | ✗ | ベクトル検索が限定的、クラスター管理あり |
+
+→ **「サーバーレス＋最小運用負荷」と来たら OpenSearch Serverless** 一択。
+
+### Step Functions Distributed Map とは
+
+```
+S3上のオブジェクトを自動列挙 → 最大10,000並列で各ファイルを処理
+
+通常の Map ステート     → 配列データのイテレート
+Distributed Map ステート → S3インベントリ・S3リストから直接取得して大規模並列
+```
+
+- リトライ・エラーハンドリングは Step Functions の組み込み機能で対応
+- 個別のエラー処理コードを書く必要なし
+- 大量ファイルのバッチ処理オーケストレーションとして最適
