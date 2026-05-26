@@ -461,3 +461,115 @@ Cognito には 2 つの機能があり、目的が異なる。
 | **「サービス間（M2M）の API 認証を IAM で強固に行いたい」** | ❌ **Cognito は不要。IAM ロール + SigV4 が正解** |
 
 **覚え方**：Cognito は「人間のユーザー向け認証」。サービス間通信（MCP クライアント ↔ Lambda 等）は IAM ロール + SigV4 が AWS の標準。
+
+---
+
+## Step Functions によるエージェントオーケストレーション（AIP-38）
+
+### Amazon States Language (ASL)
+
+Step Functions のステートマシン定義に使う **JSON ベースの言語**。  
+Task / Choice / Parallel / Wait / Map などのステートを組み合わせてワークフローを記述する。
+
+```json
+{
+  "Comment": "購買支援フロー",
+  "StartAt": "商品検索",
+  "States": {
+    "商品検索": {
+      "Type": "Task",
+      "Resource": "arn:aws:bedrock:...",
+      "Retry": [...],
+      "Catch": [...],
+      "Next": "パーソナライズ推薦"
+    }
+  }
+}
+```
+
+コードを書かず**宣言的**にワークフローを定義できる点が最大のメリット。
+
+---
+
+### Retry フィールド
+
+一時的な障害を自動で再試行する設定。
+
+| パラメータ | 意味 |
+|---|---|
+| `ErrorEquals` | 対象エラータイプ（例: `["States.TaskFailed"]`）|
+| `IntervalSeconds` | 初回リトライまでの待機秒数 |
+| `MaxAttempts` | 最大試行回数（0 = リトライなし）|
+| `BackoffRate` | 指数バックオフの倍率（例: 2.0 なら毎回2倍に延びる）|
+
+```json
+"Retry": [
+  {
+    "ErrorEquals": ["States.TaskFailed"],
+    "IntervalSeconds": 2,
+    "MaxAttempts": 3,
+    "BackoffRate": 2.0
+  }
+]
+```
+
+---
+
+### Catch フィールド
+
+リトライ上限を超えた場合（または対象エラー発生時）に**代替パスへ遷移**する設定。
+
+```json
+"Catch": [
+  {
+    "ErrorEquals": ["States.ALL"],
+    "Next": "代替フロー"
+  }
+]
+```
+
+- `ErrorEquals: ["States.ALL"]` = すべてのエラーをキャッチ
+- `Next` で指定したステートに遷移 → フォールバック処理を実行
+
+---
+
+### AIP試験での使い分け
+
+| 要件 | 正解 |
+|---|---|
+| 順次実行 + エラー時フォールバック（運用負荷最小） | **Step Functions（ASL で宣言的に定義）** |
+| オーケストレーションロジックをコードで実装 | Lambda = 自前再発明・保守コスト大（引っかけ）|
+| イベント駆動のルーティング | EventBridge（ただしワークフロー状態管理は不可）|
+| 非同期バッファリング | SQS（順次実行制御やフォールバック定義は不可）|
+
+---
+
+## MCP トランスポートと認証（AIP-39）
+
+### Streamable HTTP（MCPトランスポート）
+
+| 項目 | 内容 |
+|---|---|
+| 用途 | **リモート MCP サーバー**との通信（ネットワーク越し） |
+| 対比 | STDIO = ローカルプロセス間通信（リモート不可） |
+| プロトコル | 通常の HTTP リクエスト/レスポンス（ストリーミングは任意、必須ではない） |
+| AWSとの組み合わせ | **API Gateway 互換**（Lambda + API GW でサーバーレス化可能） |
+| AIP試験ポイント | サーバーレスでMCPサーバーを公開する → Streamable HTTP を選ぶ |
+
+### OIDC（OpenID Connect）
+
+- **OAuth 2.0 の拡張**：OAuth 2.0 は「認可」のみ → OIDC は「認証（誰であるか）」を追加
+- JWT（ID トークン）でユーザー情報（`sub`, `email`, `groups` 等）を伝達
+- **Amazon Cognito** は OIDC プロバイダーとして動作
+- API Gateway の Cognito オーソライザーが JWT を自動検証 → Lambda にクレームを渡す
+- AIP試験ポイント：「エンドユーザーの認証」= OIDC / Cognito。「AWSサービス間の認可」= IAM / SigV4
+
+### Cognito vs IAM 使い分け（再整理）
+
+| シナリオ | 正解 |
+|---|---|
+| 外部エンドユーザーの認証・認可（OAuth 2.0/OIDC） | **Cognito オーソライザー** |
+| AWS ユーザー/サービスが Lambda・Bedrock を呼ぶ | **IAM ロール + SigV4** |
+| MCPクライアント ↔ Lambda（サービス間） | IAM ロール |
+| モバイル/Webアプリユーザーがバックエンドに接続 | Cognito |
+
