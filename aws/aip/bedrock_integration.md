@@ -943,3 +943,310 @@ Half-Open（試験中）
 「トークン制限への自動対応」→ トークナイザーで事前計算 + 動的プロンプト整形
 「監視してSNS通知 + 手動対応」→ 自動化要件があれば不正解
 ```
+
+---
+
+## Step Functions + Bedrock 統合パターン（AIP-49）
+
+### Step Functions Express vs Standard の選び方
+
+| 項目 | Express Workflow | Standard Workflow |
+|---|---|---|
+| **最大実行時間** | **5分** | 1年 |
+| **課金単位** | 実行時間＋状態遷移数 | 状態遷移数のみ |
+| **用途** | 高スループット・短時間バッチ処理 | 長時間ワークフロー・人間承認フロー |
+| **実行ログ** | CloudWatch Logs（非同期） | CloudWatch + 実行履歴（コンソール） |
+| **冪等性保証** | ❌ at-least-once | ✅ exactly-once |
+
+#### ⚠️ 試験の落とし穴：「Express = 5分制限を問題文で確認してから選べ」は**間違い**
+
+- 単一レビュー処理（JSON取得 → フィールド抽出 → Bedrock推論 → S3書き込み）は数秒〜数十秒で完了
+- 問題文に「5分以内」と明記されていなくても、**処理内容から常識的に判断**する
+- 「Lambda利用を最小化」「低コスト」「高スループット」という要件が出たら Express を疑う
+
+```
+処理時間の目安（Express が適切なケース）
+┌─────────────────────────────────────────┐
+│  S3 GetObject         〜 100ms          │
+│  JSON フィールド抽出   < 1ms（Pass状態） │
+│  Bedrock InvokeModel  〜 2-5秒          │
+│  S3 PutObject         〜 100ms          │
+│  ─────────────────────────────────────  │
+│  合計                 < 10秒 << 5分     │
+└─────────────────────────────────────────┘
+```
+
+---
+
+### Lambda-less アーキテクチャ：SDK統合 + Pass状態
+
+#### Step Functions SDK Integration（最適化統合）
+
+Lambda を介さずに AWS API を**直接**呼び出せる。
+
+```json
+// S3 GetObject を直接呼ぶ状態定義
+{
+  "Type": "Task",
+  "Resource": "arn:aws:states:::s3:getObject",
+  "Parameters": {
+    "Bucket": "my-bucket",
+    "Key.$": "$.s3Key"
+  },
+  "ResultPath": "$.s3Content",
+  "Next": "ExtractFields"
+}
+```
+
+```json
+// Bedrock InvokeModel を直接呼ぶ
+{
+  "Type": "Task",
+  "Resource": "arn:aws:states:::bedrock:invokeModel",
+  "Parameters": {
+    "ModelId": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "Body": {
+      "prompt.$": "$.extractedText"
+    }
+  }
+}
+```
+
+**Lambda と比べたメリット:**
+- コールドスタートなし
+- Lambda 実行コスト不要
+- IAM ロール管理がシンプル（Step Functions の実行ロールのみ）
+
+---
+
+#### Pass 状態：ゼロコスト JSON 変換
+
+Pass 状態は**Lambdaもコンピュートも使わず**、入力を加工して次の状態に渡せる。
+
+```json
+{
+  "Type": "Pass",
+  "Parameters": {
+    "productId.$": "$.body.product_id",
+    "reviewText.$": "$.body.review_text",
+    "timestamp.$": "$.body.created_at"
+  },
+  "ResultPath": "$.extracted",
+  "Next": "InvokeBedrock"
+}
+```
+
+**使える組み込み関数（States.*）:**
+
+| 関数 | 用途 |
+|---|---|
+| `States.StringToJson` | 文字列 → JSONオブジェクト変換 |
+| `States.JsonToString` | JSONオブジェクト → 文字列変換 |
+| `States.Format` | 文字列フォーマット（テンプレート） |
+| `States.ArrayGetItem` | 配列から要素取得 |
+| `States.MathAdd` | 数値加算 |
+
+💡 **試験判断軸**：「Lambdaを最小化してJSONフィールドを抽出」→ Pass状態 + States.* 組み込み関数
+
+---
+
+### Amazon Bedrock Flows（フロー）詳細
+
+#### 概要
+
+**Amazon Bedrock Flows** は、生成AIワークフローを**ノードベースのビジュアルパイプライン**で構築するサービス。
+コードを書かずにドラッグ＆ドロップで複雑なAIワークフローを設計できる。
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Bedrock Flows のイメージ                    │
+│                                                             │
+│  [Input Node]                                               │
+│       ↓                                                     │
+│  [Prompt Node] ──(condition)──→ [Prompt Node 2]            │
+│       ↓                                                     │
+│  [S3 Retrieval Node]  ←── RAG用S3データソース               │
+│       ↓                                                     │
+│  [Agent Node] （Bedrock Agent を呼び出せる）                 │
+│       ↓                                                     │
+│  [Output Node]                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 利用可能なノード種別
+
+| ノード | 役割 |
+|---|---|
+| **Input / Output** | フロー全体の入出力 |
+| **Prompt** | FM へのプロンプト実行（Claude, Titan等） |
+| **Condition** | 条件分岐（if/else ロジック） |
+| **Iterator** | コレクションを繰り返し処理 |
+| **Collector** | 反復処理結果の集約 |
+| **S3 Retrieval** | S3からドキュメント取得 |
+| **Knowledge Base Retrieval** | Bedrock Knowledge Base から検索 |
+| **Agent** | Bedrock Agent の呼び出し |
+| **Lambda** | カスタム処理（Lambda呼び出し） |
+
+#### Bedrock Flows が得意なユースケース
+
+- ✅ **RAGパイプライン**（S3/Knowledge Base → Prompt → Output）
+- ✅ **プロンプトチェーン**（複数プロンプトを順次実行）
+- ✅ **条件分岐を含む生成AIフロー**（回答品質に応じて別プロンプト）
+- ✅ **ローコードで素早くプロトタイピング**
+
+#### Bedrock Flows の**制限・不得意**なこと
+
+| 制限 | 理由 |
+|---|---|
+| ❌ **決定論的なJSONフィールド抽出** | 変換はLLMベースか条件ロジックに限られ、`States.StringToJson` のような確実な変換ができない |
+| ❌ **高度なエラーハンドリング** | Step Functions の Catch/Retry に相当する細かい制御が難しい |
+| ❌ **SQS/Kinesis との直接統合** | イベント駆動のキュー処理には不向き |
+| ❌ **非AI処理の複雑なオーケストレーション** | あくまで生成AIワークフロー用 |
+
+#### vs Step Functions / Bedrock Agent の使い分け
+
+```
+どれを使うか判断フロー：
+
+処理に LLM（生成AI）が含まれる？
+├─ NO → Step Functions（純粋なオーケストレーション）
+└─ YES
+    ├─ ビジュアルにノードで設計したい・RAGパイプライン・プロンプトチェーン
+    │   → Bedrock Flows
+    ├─ 自律的にツールを選んでタスク実行（エージェント的動作）
+    │   → Bedrock Agents
+    └─ 決定論的処理（確実なJSONパース・厳密なフロー制御）+ Bedrock呼び出し
+        → Step Functions（SDK Integration でBedrock直接呼び出し）
+```
+
+---
+
+### Bedrock Agent を SQS コンシューマにできない理由
+
+Bedrock Agent は**自然言語入力 → LLM推論 → ツール選択 → アクション実行**という非決定的な処理モデル。
+
+```
+❌ なぜ SQS の直接コンシューマになれないか：
+
+SQS メッセージ（JSONイベント）
+        ↓
+  Bedrock Agent が受け取るには？
+        ↓
+  「Lambda で受け取り → Agent を呼び出す」という間接構成が必要
+        ↓
+  つまり Lambda なしでは SQS → Agent は不可能
+```
+
+**Bedrock Agent の正しい呼び出しパターン:**
+- ✅ API Gateway + Lambda → Agent
+- ✅ Step Functions → Agent（SDK Integration）
+- ✅ Lambda（SQS トリガー）→ Agent
+- ❌ SQS → Agent（直接）
+
+---
+
+### 試験での判断軸（AIP-49 パターン）
+
+```
+「Lambda利用を最小化 + S3のJSON処理 + Bedrock推論」
+  → Step Functions Express + SDK Integration + Pass状態
+
+「可視化されたAIパイプライン・プロンプトチェーン・RAG」
+  → Bedrock Flows
+
+「自律的なタスク実行・ツール選択・複雑な意思決定」
+  → Bedrock Agents（ただし SQS の直接コンシューマにはなれない）
+
+「Expressは5分制限があるから外す」
+  → ❌ 誤り。単一レコード処理は数秒で完了 → Express が適切
+  
+「EventBridge Pipes でイベント駆動にできる」
+  → ❌ Pipes の変換は基本的なもの。決定論的JSON抽出・Bedrock統合には不十分
+```
+
+---
+
+## CloudWatch モニタリング：Contributor Insights vs 異常検出アラーム（AIP-50）
+
+### CloudWatch Contributor Insights
+
+**目的**：ログデータから「最も影響の大きい上位N件の貢献者」をリアルタイムでランキング表示する。
+
+```
+例）
+・エラーを最も多く発生させている IP アドレス Top10
+・最もトークンを消費しているツール呼び出し Top5
+・最もリクエストが多いユーザー ID Top20
+```
+
+**仕組み**：
+- CloudWatch Logs のログに対してルールを定義
+- 指定フィールドの値ごとにカウント / sum を集計してランキング化
+- リアルタイムで「誰が / 何が一番多いか」を可視化
+
+**⚠️ 限界**：
+- アラームのしきい値は**固定値（静的）**
+- 「利用パターンに追従して基準値が自動更新」はできない
+- → **「自動更新」要件があれば Contributor Insights は不正解**
+
+---
+
+### CloudWatch 異常検出アラーム（Anomaly Detection Alarm）
+
+**目的**：ML でメトリクスの「正常な振る舞い」を自動学習し、逸脱を検知する。
+
+```
+通常の CloudWatch アラーム：
+  「値が 1000 を超えたら ALARM」← しきい値は固定
+
+異常検出アラーム：
+  ML が過去データを学習 → 上限/下限バンドを動的生成
+  「バンドを外れたら ALARM」← 基準値が自動更新 ✅
+
+  例）平日昼はトークン消費が自然と多い
+    → バンドが昼は高め、深夜は低めに自動調整
+    → 本当の異常だけを検知
+```
+
+**特徴**：
+- 時間帯・曜日などの季節性パターンを自動考慮
+- しきい値の手動メンテナンスが不要
+- 標準偏差の倍数でバンドの幅を調整可能
+
+---
+
+### AIP-50 の正解構成（Bedrock トークン異常監視）
+
+```
+Bedrock モデル呼び出しログ
+        ↓
+CloudWatch Logs（ログ収集）
+        ↓
+メトリクスフィルター（ツール名をディメンションに指定）
+        ↓
+カスタムメトリクス（ツール別 InputTokenCount / OutputTokenCount）
+        ↓
+CloudWatch 異常検出アラーム（ML ベース・自動更新）✅
+```
+
+**メトリクスフィルターのポイント**：
+- JSON ログからツール名フィールドを抽出してディメンションに設定
+- ツールごとに別々のメトリクスとして発行 → 「どのツールが異常か」を特定可能
+
+---
+
+### 試験での判断軸（AIP-50 パターン）
+
+```
+「アラートの基準値が自動的に更新される」
+  → CloudWatch 異常検出アラーム（固定しきい値は不正解）
+
+「どの〇〇が一番多いか可視化・ランキング表示したい」
+  → CloudWatch Contributor Insights
+
+「Contributor Insights でアラーム設定」
+  → ❌ しきい値は固定。自動更新要件があれば不適
+
+「SageMaker Random Cut Forest で異常検出」
+  → ❌ 構成が複雑すぎ。CloudWatch 単体で完結するなら CloudWatch が正解
+```
