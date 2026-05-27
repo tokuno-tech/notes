@@ -1166,6 +1166,173 @@ SQS メッセージ（JSONイベント）
 
 ---
 
+## Bedrock API 設計パターン（AIP-52 / AIP-53）
+
+### Converse API vs InvokeModel API（AIP-52）
+
+| 比較軸 | **Converse API** | InvokeModel API |
+|---|---|---|
+| インターフェース | **統一された messages 形式** | モデルごとに異なる JSON 形式 |
+| マルチターン対話 | messages 配列に履歴を含めるだけ | 外部 DB など自前実装が必要 |
+| モデル切り替え | modelId 変更のみ | フォーマット変換ロジックも変更必要 |
+| 対応 SDK | Python(Boto3) / JavaScript / Java… 全言語共通 | 同上 |
+| ストリーミング | `ConverseStream` で対応 | `InvokeModelWithResponseStream` |
+| ツール呼び出し | `toolUse` で標準対応 | モデル固有の形式 |
+| 追加コスト | なし（トークン課金は同じ） | なし |
+
+**試験での判断軸**：
+```
+「複数環境(Lambda / EKS)から統一APIで呼び出す」
+「マルチターン会話を外部DBなしで維持」
+「Python SDK と JavaScript SDK で同一インターフェース」
+  → 全部 Converse API が正解
+
+「InvokeModel + Lambda ごとに認証方式が違う」
+  → ❌ 統一認証要件に違反
+```
+
+---
+
+### CDK での Bedrock モデル参照方法（AIP-53）
+
+#### fromFoundationModelId() ← オンデマンド（通常はこちら）
+
+```python
+from aws_cdk import aws_bedrock as bedrock
+
+model = bedrock.FoundationModel.fromFoundationModelId(
+    self, "Model",
+    bedrock.FoundationModelIdentifier.ANTHROPIC_CLAUDE_3_SONNET_20240229_V1_0
+)
+```
+
+- **オンデマンドスループット**：従量課金、即時利用開始
+- モデル ID を外部から注入（Parameter Store 等）すれば**コード変更なしに切り替え**可能
+- 複数モデルの比較評価フェーズに最適
+
+#### fromProvisionedModelArn() ← プロビジョンドスループット（慎重に）
+
+```python
+model = bedrock.ProvisionedModel.fromProvisionedModelArn(
+    self, "Model",
+    "arn:aws:bedrock:us-east-1::provisioned-model/xxxxx"
+)
+```
+
+- **専用キャパシティを事前購入**（最低1時間〜、長期契約は1〜6ヶ月）
+- 安定したスループットが必要な本番環境向け
+- 比較評価フェーズで複数モデルに使うと**コストが大幅増**
+- ARN ベースなのでモデル切り替えに手間がかかる
+
+**試験での判断軸**：
+```
+「複数FMを比較評価」「コード変更なしに切り替え」「スタートアップ・低コスト」
+  → fromFoundationModelId()（オンデマンド）
+
+「本番で安定スループット確保」「長期運用コミット済み」
+  → fromProvisionedModelArn()（プロビジョンド）
+
+「比較評価中にプロビジョンドを複数購入」
+  → ❌ コスト過大
+```
+
+#### 一元パイプライン構成パターン（AIP-53 正解）
+
+```
+単一 CDK アプリケーション
+  ├── StageA (Staging)
+  │     └── AppStack (modelId = staging用FM)
+  └── StageB (Production)
+        └── AppStack (modelId = 本番用FM)
+
+単一 CodePipeline
+  ├── Source ステージ
+  ├── Staging デプロイステージ（CodeBuild）
+  ├── 手動承認ステージ（任意）
+  └── Production デプロイステージ（CodeBuild）
+```
+
+「環境ごとに別リポジトリ・別パイプライン」→ コード重複・管理分散 → ❌
+
+---
+
+## IAM ABAC と Bedrock 条件キー（AIP-51）
+
+### IAM ABAC（属性ベースアクセスコントロール）
+
+**RBAC vs ABAC 比較**：
+
+| 観点 | RBAC（ロールベース） | ABAC（属性ベース） |
+|---|---|---|
+| 制御単位 | ロール（職種・役職） | タグ（属性キー＝値） |
+| ポリシー数 | リソース種類 × ロール数 分必要 | 少数の汎用ポリシーで済む |
+| リソース追加時 | ポリシー更新が必要 | タグ設定だけで自動適用 |
+| スケーラビリティ | 組織拡大でポリシーが爆発的に増加 | タグ付けルールを守ればスケール |
+| 典型ユースケース | 小規模・シンプルな権限管理 | 診療科・部署など多部門組織 |
+
+```
+ABAC の動作イメージ（診療科タグで制御）：
+  IAM ユーザー/ロール に department=cardiology タグ
+        ↓
+  ポリシー: department タグが一致するリソースのみ許可
+        ↓
+  新しい診療科が増えても ポリシー変更不要、タグ設定だけで OK
+```
+
+```
+ABAC 例（診療科タグで制御）：
+  IAM ユーザー/ロール に department=cardiology タグ
+        ↓
+  ポリシー: department タグが一致するリソースのみ許可
+        ↓
+  新しい診療科が増えても ポリシー変更不要、タグ設定だけで OK
+```
+
+### Bedrock 専用の IAM 条件キー
+
+| 条件キー | 用途 |
+|---|---|
+| `bedrock:ModelId` | 利用可能な基盤モデルを制限 |
+| `bedrock:GuardrailIdentifier` | 使用するガードレールを強制 |
+
+```json
+{
+  "Condition": {
+    "StringEquals": {
+      "bedrock:ModelId": "anthropic.claude-3-sonnet-20240229-v1:0",
+      "bedrock:GuardrailIdentifier": "arn:aws:bedrock:...:guardrail/cardiology-guardrail"
+    }
+  }
+}
+```
+
+**試験での判断軸**：
+```
+「診療科ごとに使えるモデル・ガードレールを制限」
+  → IAM ABAC + bedrock:ModelId + bedrock:GuardrailIdentifier 条件キー
+
+「SCP でアカウント単位に制限」
+  → ❌ 粒度が粗い（同一アカウント内の診療科分離には不十分）
+
+「Bedrock Guardrails でコンテンツフィルター」
+  → ❌ それは入出力の安全制御。モデル利用の制限ではない
+```
+
+### 予防的統制 vs 検出的統制（AIP-51 の核心）
+
+```
+予防的統制（preventive）：不正を事前に防ぐ
+  → IAM ポリシー + 条件キー、VPC エンドポイント
+
+検出的統制（detective）：発生後に検知・記録する
+  → CloudTrail, GuardDuty, CloudWatch アラーム
+
+「厳密に制限する」= 予防的統制が必要
+ガードレールや Insights だけでは予防的統制にならない ← 試験の罠
+```
+
+---
+
 ## CloudWatch モニタリング：Contributor Insights vs 異常検出アラーム（AIP-50）
 
 ### CloudWatch Contributor Insights
@@ -1249,4 +1416,189 @@ CloudWatch 異常検出アラーム（ML ベース・自動更新）✅
 
 「SageMaker Random Cut Forest で異常検出」
   → ❌ 構成が複雑すぎ。CloudWatch 単体で完結するなら CloudWatch が正解
+```
+
+---
+
+## RAG チャンキング戦略と RetrieveAndGenerate API（AIP-54）
+
+### 問題のコンテキスト
+- Bedrock Knowledge Base（マネージドRAG）を使っていても、**チャンキングが悪いと回答品質が落ちる**
+- 固定サイズ分割（例: 400トークン）では、論理的に関連するセクションが別チャンクに分断される
+- 「コンテキストウィンドウ超過」の問題 = RAGで取得したチャンクに必要な文脈が含まれていない
+
+```
+固定400トークン分割の問題例（臨床試験報告書）：
+  [チャンク1] 試験デザイン・方法
+  [チャンク2] 結果（数値データ）  ← クエリにヒットするが文脈欠落
+  [チャンク3] 考察・副作用評価
+→ チャンク2だけ取得しても意味が不完全
+```
+
+### セマンティックチャンキング（Bedrock Knowledge Base 標準機能）
+
+文ごとに埋め込みベクトルを生成し、**隣接する文間のコサイン距離が大きくなるポイントを境界**にする。
+
+| パラメータ | 意味 |
+|---|---|
+| **ブレークポイントパーセンタイルしきい値** | 文間距離の上位N%のみを境界とする（95%=上位5%の大きな断絶のみ境界） |
+| **バッファサイズ** | 前後N文を含めて埋め込みを生成（例: 3文→文脈が豊かに） |
+
+```
+セマンティックチャンキング結果例：
+  [チャンク1] 試験デザイン+方法+結果+考察（意味的まとまり）
+  [チャンク2] 副作用評価セクション全体
+→ 関連情報が同一チャンクに収まる
+```
+
+### 固定サイズ vs セマンティック vs 階層的チャンキング
+
+| 方式 | 特徴 | 向いているケース |
+|---|---|---|
+| **固定サイズ** | 実装簡単、意味無視 | 文書構造が均一な場合 |
+| **セマンティック** | 意味的まとまりで分割、Bedrockネイティブ対応 | 技術文書・論文・マニュアル |
+| **階層的（親子）** | 親チャンクで文脈、子チャンクで精密検索 | 長文で大局と細部を両立したい場合 |
+
+### RetrieveAndGenerate API
+
+RAGパイプライン全体を**1回のAPI呼び出しで完結**するマネージドAPI。
+
+```
+RetrieveAndGenerate API の処理：
+  ① クエリを埋め込みベクトルに変換
+  ② ベクトルストアから類似チャンクを取得
+  ③ チャンクをプロンプトに組み込んでFMで回答生成
+  ④ 引用情報（出典）を自動付与
+```
+
+- 自前で Retrieve → Prompt組み立て → InvokeModel を実装する必要がない
+- 引用付き回答を標準でサポート（AIP-55でも重要）
+
+### Amazon Bedrock Knowledge Base の構造
+
+```
+Bedrock Knowledge Base（マネージドRAGサービス）
+  ├─ データソース（S3, Confluence, SharePoint など）
+  ├─ チャンキング設定（固定 / セマンティック / 階層的）
+  ├─ 埋め込みモデル（Titan Embeddings など）
+  └─ ベクトルストア（選択式）
+       ├─ Amazon OpenSearch Serverless（デフォルト）
+       ├─ Amazon Aurora (pgvector)
+       └─ Pinecone / MongoDB Atlas など
+```
+
+**Amazon Kendra との違い**：
+- Kendra = キーワードベースのエンタープライズSearch（RAGではない）
+- Bedrock Knowledge Base = ベクトル検索ベースのマネージドRAG
+- AIP試験でKendraが出たら「キーワード検索 = 意味的マッチング弱い」で❌が多い
+
+### 試験での判断軸（AIP-54 パターン）
+
+```
+「要約を組み合わせて統合回答」（Step Functions Map-Reduce）
+  → ❌ 要約で技術的詳細（数値・仕様値）が欠落
+
+「キーワード検索（BM25/Kendra）」
+  → ❌ 同義語・文脈的関連性を捉えられない
+
+「固定トークン分割 + 全チャンク順次送信」
+  → ❌ 全チャンク処理でコスト増・結合で矛盾発生
+
+「セマンティックチャンキング + RetrieveAndGenerate API」
+  → ✅ 意味的まとまりで分割 + 関連チャンクのみ抽出 + 原文をFMに渡す
+```
+
+---
+
+## Bedrock Agent トレース機能 と 監査ログ（AIP-55）
+
+### Bedrock Agent トレース機能
+
+エージェントの各推論ステップを記録する機能。有効化すると各ステップの入出力が取得できる。
+
+| ステップ | 内容 |
+|---|---|
+| **Pre-processing** | ユーザー入力の分類・整合性チェック |
+| **Orchestration** | ツール選択・Knowledge Base 検索・アクション実行の一連の思考過程（ReAct ループ） |
+| **Post-processing** | 最終レスポンス生成 |
+
+- `enableTrace: true` を指定すると各ステップの `input` / `output` / `rationale` が返される
+- 誤動作・意図しない推論の**デバッグ**や**監査証跡**に使用
+
+#### Orchestration の詳細：ReAct ループ
+
+Bedrock Agent のオーケストレーションは **ReAct（Reasoning + Acting）** パターンで動作する。
+
+```
+ユーザー入力
+  ↓
+① Reasoning（思考）：「次に何をすべきか」を考える（Chain of Thought）
+② Acting（アクション）：Knowledge Base検索 / Lambda呼び出し / 外部API実行
+③ Observation（観察）：ツールの返り値を受け取る
+④ 再思考 → 目標達成まで①〜③をループ
+  ↓
+Post-processing へ（最終回答生成）
+```
+
+| 要素 | 内容 |
+|---|---|
+| **Reasoning** | 次に何をすべきか考える |
+| **Action** | Knowledge Base検索・Lambda（Action Group）・外部API実行 |
+| **Observation** | ツールの返り値を受け取る |
+| **繰り返し** | 目標達成まで何周でもループ |
+
+トレース有効時はこのループの**各周の入出力**（何を考え・何を呼び出し・何が返ってきたか）が全記録される  
+→ 「なぜその回答になったか」を事後追跡 = デバッグ・監査に活用
+
+### Model Invocation Logging（モデル呼び出しログ）
+
+| 項目 | 内容 |
+|---|---|
+| **出力先** | CloudWatch Logs または S3 |
+| **記録内容** | プロンプト全文（入力）＋ モデルの応答（出力） |
+| **用途** | 会話内容の完全な監査証跡、コンプライアンス対応 |
+
+### CloudTrail との違い（試験頻出）
+
+| サービス | 記録内容 | 監査用途 |
+|---|---|---|
+| **CloudTrail** | API呼び出しメタデータ（誰が・いつ・どのAPIを） | 操作ログ・API監査 |
+| **Model Invocation Logging** | プロンプト本文＋モデル応答の**内容** | 会話内容の監査 |
+
+> ポイント：「チャット内容を監査したい」→ CloudTrail では**不十分**。Model Invocation Logging が必要。
+
+### Bedrock Knowledge Base の引用（citations）フィールド
+
+- `RetrieveAndGenerate` API のレスポンスには **`citations`** フィールドが自動付与される
+- どのドキュメント・どのチャンクを参照したかが明示 → ソース帰属の自動化
+- 別途ソース追跡の仕組みを構築する必要がない
+
+### AIP-55 アーキテクチャパターン（チャットボット監査対応）
+
+```
+ユーザー
+  ↓
+Amazon CloudFront（エッジ最適化・レイテンシー軽減 ※AI応答そのものではなく配信レイヤー）
+  ↓
+API Gateway + Lambda
+  ↓
+Bedrock Agent（enableTrace: true）
+  ├─ Knowledge Base（RAG・citations付き）
+  └─ Model Invocation Logging → CloudWatch Logs / S3（会話内容の監査証跡）
+```
+
+**CloudFront の役割**：AI応答のストリーミングや静的コンテンツの配信を最適化。AIの推論そのものを高速化するわけではない。
+
+### 試験での判断軸（AIP-55 パターン）
+
+```
+「会話内容を監査したい」
+  → CloudTrail だけ → ❌（API メタデータのみ、プロンプト内容なし）
+  → Model Invocation Logging → ✅（プロンプト＋応答の完全記録）
+
+「エージェントの推論過程を把握したい」
+  → Agent トレース機能（enableTrace）→ ✅
+
+「RAG の回答のソース元を示したい」
+  → Knowledge Base の citations フィールド → ✅（自動付与）
 ```
