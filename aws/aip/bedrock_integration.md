@@ -1659,4 +1659,155 @@ Bedrock Agent（enableTrace: true）
 「Kinesis + Lambda + DynamoDB でリアルタイム集計」
   → ❌ CW で代替できるのにオーバーエンジニアリング
 ```
+
+## Bedrock プライベート接続 × データレイク列単位制御（AIP-58）
+
+### Bedrock へのプライベート接続：インターフェイス VPC エンドポイント
+- **bedrock-runtime** エンドポイント = InvokeModel などの推論 API 用（bedrock エンドポイントとは別）
+- プライベート DNS を有効化すれば **SDK のコードを変更せず** にエンドポイント経由の通信に切り替わる
+- NAT ゲートウェイ経由は **インターネットを通る** → 「インターネット経由なし」要件を満たさない
+- Transit Gateway で Bedrock の「サービス VPC」にピアリングは **技術的に不可**（Bedrock にユーザーがアクセスできる VPC は存在しない）
+
+#### aws:SourceVpce 条件キー
+```json
+{
+  "Condition": {
+    "StringEquals": {
+      "aws:SourceVpce": "vpce-xxxxxxxxxx"
+    }
+  }
+}
+```
+- IAM ポリシーの Condition 要素でこれを指定すると、**特定の VPC エンドポイント経由のリクエストのみ**を許可できる
+- エンドポイントポリシーと組み合わせて二重防御が可能
+
+### データレイクの列単位アクセス制御
+
+#### Lake Formation → Glue Data Catalog → Athena の連携
+```
+S3（生データ）
+  ↓ Glue Crawler
+Glue Data Catalog（テーブル定義）
+  ↓ Lake Formation（権限管理レイヤー）
+Athena（クエリ実行）
+  → Lake Formation のフィルターが適用された結果のみ返る
+```
+
+#### アクセス制御粒度の比較
+| 手段 | 粒度 | クロスアカウント列制御 |
+|---|---|---|
+| **Lake Formation LF-Tag ベース（TBAC）** | **列単位** | **✅ 対応** |
+| Glue Data Catalog リソースポリシー | DB / テーブル単位 | ❌ 列制御不可 |
+| Athena ワークグループ + IAM | ワークグループ単位 | ❌ 列フィルタリング不可 |
+| S3 バケットポリシー / ACL | オブジェクト（ファイル）単位 | ❌ 列制御不可 |
+
+#### Lake Formation LF-Tag ベースアクセスコントロール（TBAC）の特徴
+- Data Catalog のリソース（DB・テーブル・**列**）にキーバリュータグを付与
+- タグに基づいてアクセス権限を付与 → ポリシーの更新頻度が大幅に減少
+- **AWS RAM** 経由で他アカウントに Data Catalog リソースを共有 → クロスアカウント列制御が実現
+
+### 試験での判断軸（AIP-58 パターン）
+```
+「Bedrock API へのインターネット経由なし接続」
+  → インターフェイス VPC エンドポイント（PrivateLink）→ ✅
+
+「特定 VPC エンドポイント経由のみ許可したい」
+  → aws:SourceVpce 条件キー → ✅
+
+「テーブルの特定列へのアクセスをクロスアカウントで制限したい」
+  → Lake Formation LF-Tag → ✅
+  → Athena ワークグループ、Glue リソースポリシー → ❌（列単位制御不可）
+```
+
+---
+
+## Amazon Transcribe：バッチ vs ストリーミング（AIP-59）
+
+| 方式 | 特徴 | ユースケース |
+|---|---|---|
+| **Transcribe Streaming** | リアルタイム文字起こし。**部分的な結果（Partial Results）** 機能で発話途中のテキスト断片を逐次取得可能 | 通話中のリアルタイム解析、コールセンター支援 |
+| **Transcribe Batch** | 録音ファイルを非同期ジョブで処理。完成トランスクリプトを後から取得 | 会議録、VOD 字幕生成 |
+
+### リアルタイム通話支援のアーキテクチャ（AIP-59）
+```
+音声 → Transcribe Streaming（部分的結果機能）→ テキスト断片
+           ↓
+InvokeModelWithResponseStream（トークン単位ストリーミング）
+           ↓
+API Gateway WebSocket API（双方向・持続接続）→ オペレーター画面
+```
+
+### 試験での判断軸（AIP-59 パターン）
+```
+「発話完了前から解析を開始したい」
+  → Transcribe Streaming + Partial Results → ✅
+
+「トークン単位で段階的に回答を配信したい」
+  → InvokeModelWithResponseStream → ✅
+
+「双方向通信（サーバープッシュ＋クライアント送信）」
+  → API Gateway WebSocket API → ✅
+
+「バッチ文字起こし（Transcribe Batch）」
+  → ❌ 発話完了後のみ処理できリアルタイム性がない
+
+「SQS / ElastiCache + ポーリング」
+  → ❌ 単方向かつポーリング待ちが生じる、双方向通信要件を満たさない
+```
+
+---
+
+## Amazon Q Business：S3 データソースのアクセス制御（AIP-60）
+
+### 重要な前提：Q Business のアクセス制御レイヤー
+```
+ユーザー → Amazon Q Business（アプリ層でACL評価）→ S3（サービスロールでアクセス）
+```
+- **S3 にアクセスするのは Q Business のサービスロール**であり、エンドユーザーではない
+- S3 バケットポリシーに IAM Identity Center グループ ARN を設定しても、Q Business サービスロールへのアクセス制御にしかならず、**ユーザー単位のフィルタリングには機能しない**
+- ユーザーコンテキストに基づく制御は **Q Business のアプリケーション層（ACL ファイル）** で行う
+
+### acl.json による一元アクセス制御（正解パターン）
+- S3 バケットの**ルートに acl.json を 1 ファイル**作成し、データソース設定のアクセス制御セクションで参照
+- Q Business S3 コネクタが公式にサポートする仕組み
+
+```json
+[
+  {
+    "keyPrefix": "s3://bucket/naika/",
+    "aclEntries": [
+      { "Type": "GROUP", "Name": "内科グループ", "Access": "ALLOW" }
+    ]
+  },
+  {
+    "keyPrefix": "s3://bucket/geka/",
+    "aclEntries": [
+      { "Type": "GROUP", "Name": "外科グループ", "Access": "ALLOW" }
+    ]
+  }
+]
+```
+- データソースの **同期（sync）** 実行で ACL 情報がインデックスに取り込まれる
+- ユーザーがクエリを実行すると、**IAM Identity Center のグループメンバーシップに基づいて検索結果がフィルタリング**される
+- 単一ファイルで全マッピングを一元管理 → 変更時は 1 ファイル更新＋再同期のみ
+
+### 関連ファイルの使い分け
+| ファイル | 用途 |
+|---|---|
+| **acl.json**（バケットルート） | アクセス制御（ALLOW/DENY、ユーザー/グループ） |
+| **metadata.json** | ドキュメント属性（タイトル・作成日など）の付与、アクセス制御には使わない |
+
+### 試験での判断軸（AIP-60 パターン）
+```
+「S3バケットポリシーで IAM Identity Center グループを条件指定」
+  → ❌ S3アクセス主体はQ BusinessのサービスロールのためユーザーAが区別できない
+
+「プレフィックスごとに個別 permissions.json を配置」
+  → ❌ Q Business は複数ACLファイルを統合して読み取る機能なし
+
+「診療科ごとに Q Business アプリを別々に作成」
+  → ❌ オーバーエンジニアリング、部門横断検索不可、運用負荷増大
+
+「バケットルートに acl.json を1つ作成してデータソース設定で参照」
+  → ✅ Q Business S3コネクタ公式サポート、一元管理、最小運用負荷
 ```
