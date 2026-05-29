@@ -65,6 +65,111 @@ Lambda → postToConnection → クライアントへプッシュ
 
 ---
 
+## バッファリング vs ストリーミング（基本概念）（AIP-77）
+
+### バッファリング（Buffering）とは
+
+> **データを一旦「バッファ（一時保管場所）」に溜めてから、まとめて送る仕組み。**
+
+```
+バッファリングあり（API Gateway REST / HTTP API）:
+  Bedrock が「A」→「B」→「C」を順番に生成
+  API Gateway が内部バッファに溜める: [A, B, C]
+  全部揃ったらクライアントへ一括送信: "ABC"
+  → ユーザーはABC全部が来るまで何も見えない（待ち時間＝生成時間全体）
+
+バッファリングなし（ストリーミング）:
+  Bedrock が「A」を生成 → 即クライアントへ送信（表示）
+  Bedrock が「B」を生成 → 即クライアントへ送信（表示）
+  Bedrock が「C」を生成 → 即クライアントへ送信（表示）
+  → ユーザーはAを受け取った時点で表示される（TTFT大幅短縮）
+```
+
+**TTFT（Time To First Token）**：最初のトークンが表示されるまでの待ち時間。ストリーミングで最小化できる。
+
+---
+
+## Lambda レスポンスストリーミング と API Gateway のバッファリング問題（AIP-77）
+
+### 重要な誤解：「API Gateway 経由でもストリーミングできる」→ ❌
+
+```
+API Gateway REST API  → バッファリング（ストリーミング不可）
+API Gateway HTTP API  → バッファリング（ストリーミング不可）
+→ Lambda 側を RESPONSE_STREAM に設定しても、
+  API Gateway が間に入るとチャンク転送の効果が失われる
+```
+
+### WebSocket API はストリーミングとは別概念
+
+```
+API Gateway WebSocket API：
+  双方向の「メッセージベース通信」
+  サーバーから任意タイミングでメッセージをプッシュできる
+  
+  ≠ HTTPストリーミング（チャンク転送）
+  
+  WebSocket でも逐次表示は可能だが：
+  ・接続管理（connect/disconnect ハンドラ）が必要
+  ・接続IDの永続化（DynamoDB等）が必要
+  ・postToConnection API の呼び出し実装が必要
+  → 構成が複雑、運用負荷が増える
+```
+
+### Lambda Function URL が正解になる理由
+
+```
+Lambda 関数 URL（Function URL）：
+  Lambda 関数に直接 HTTPS エンドポイントを付与
+  呼び出しモード RESPONSE_STREAM を設定
+  → HTTP/1.1 chunked transfer encoding でチャンクをそのままクライアントへ転送
+  
+  メリット：
+  ・API Gateway のバッファリング問題を回避
+  ・接続管理・メッセージ管理の実装が不要
+  ・サービス数は Lambda + Bedrock の2つだけ（運用最小）
+  
+  CloudFront を前段に置く場合：
+  CloudFront のオリジンを「Lambda 関数 URL」に設定すれば
+  ストリーミングを保ちながらグローバル配信・WAF連携が可能
+```
+
+### ストリーミング対応の比較表
+
+| 構成 | ストリーミング | サービス数 | 運用負荷 |
+|---|---|---|---|
+| **Lambda Function URL + RESPONSE_STREAM** | ✅ ネイティブ | 2 | 最小 |
+| API Gateway REST API + Lambda | ❌ バッファリング | 2 | 中 |
+| API Gateway HTTP API + Lambda | ❌ バッファリング | 2 | 中 |
+| API Gateway WebSocket + Lambda | △ メッセージベース | 2〜4 | 高（接続管理要） |
+| CloudFront + Lambda Function URL | ✅ | 3 | 中（WAF等必要な場合） |
+
+### CloudFront Functions とは（引っかけ選択肢）
+
+```
+CloudFront Functions：
+  CloudFront のエッジで動作する超軽量な関数
+  
+  できること：
+  ・リクエスト/レスポンスのヘッダー操作
+  ・URLリダイレクト
+  ・簡単なルーティング
+  
+  できないこと：
+  ・ストリーミング処理
+  ・外部サービスへの接続（Bedrock等）
+  ・トークン数のカウント・制限
+  
+  制限：
+  ・実行時間 1ミリ秒以下
+  ・メモリ 2MB
+  → LLMレスポンス処理には全く適さない
+  
+  ≠ Lambda@Edge（こちらは数秒の実行が可能）
+```
+
+---
+
 ## クロスリージョン推論（Cross-region inference）
 
 ### 概要
@@ -1031,6 +1136,86 @@ Lambda を介さずに AWS API を**直接**呼び出せる。
 
 ---
 
+#### Step Functions のネイティブ統合サービスと ElastiCache の注意点（AIP-80）
+
+**Step Functions にはネイティブサービス統合（Optimized Integration）が存在するサービスと存在しないサービスがある。**
+
+```
+ネイティブ統合あり（Optimized Integration）：
+  ✅ Amazon Bedrock（InvokeModel, InvokeAgent等）
+  ✅ AWS Lambda（関数呼び出し）
+  ✅ Amazon S3（GetObject, PutObject等）
+  ✅ Amazon DynamoDB（GetItem, PutItem等）
+  ✅ Amazon SQS（SendMessage等）
+  ✅ Amazon SNS（Publish等）
+  ✅ AWS Glue（StartJobRun等）
+  ✅ Amazon SageMaker（CreateTrainingJob等）
+  ✅ Amazon ECS / Fargate（RunTask等）
+  ✅ Amazon EventBridge（PutEvents等）
+
+ネイティブ統合なし（Lambda経由が必要）：
+  ❌ Amazon ElastiCache → Lambdaを介して操作するしかない
+  ❌ Amazon RDS（直接SQL実行） → Lambda or RDS Data API経由
+```
+
+### Step Functions ペイロードサイズ上限の回避パターン（AIP-80）
+
+**Step Functions のペイロード上限：256 KB**（ステート間で受け渡せるデータの最大サイズ）
+
+```
+問題：
+  推論トレースを含む大量の中間データ（数MB〜数GB）
+    ↓
+  ステート間のペイロードとして渡す → 256KB超過でエラー
+
+解決パターン（S3参照渡し）：
+  大量データ → S3に書き込む
+  ステート間で渡すのは「S3のパス（URI）のみ」（数十バイト）
+  
+  例：
+  ステート A の出力: { "s3_uri": "s3://bucket/output/task1.json" }
+  ステート B の入力: S3 URIを受け取ってS3から直接読む
+```
+
+### ResultSelector と ResultPath の役割
+
+```
+ResultSelector：
+  タスクの生の出力から「必要な情報だけを抽出」する
+  例：Bedrock の出力全体 → S3 URI とメタデータだけ抽出
+
+ResultPath：
+  抽出した結果を「ステートの出力のどこに格納するか」を指定する
+  例：$.s3_reference に格納 → 次のステートが $.s3_reference.uri で参照できる
+
+実例（AIP-80パターン）：
+  "ResultSelector": {
+    "output_uri.$": "$.output.s3Uri",
+    "task_id.$": "$.output.taskId"
+  },
+  "ResultPath": "$.task_result"
+  → ペイロードには軽量な参照情報のみが含まれる
+```
+
+### なぜ ElastiCache は不正解になるか（AIP-80）
+
+```
+❌ ElastiCache（Redis / Memcached）：
+  ・Step Functions との直接統合なし
+   → 各エージェントにキャッシュ読み書きロジックを追加実装が必要
+   → 問題文「エージェントの推論・行動ループを変更しない」に違反
+  ・VPCへのクラスタープロビジョニングが必要（運用負荷増）
+  ・推論トレースのような大容量非構造化データの保存には不向き
+  
+✅ S3（正解）：
+  ・Step Functions と Bedrock の両方にネイティブ統合あり
+  ・問題文に「中間データはすでにS3に格納」と記載
+  → 既存インフラを活用するだけ、追加実装不要
+  ・S3は大容量データの永続保存に最適
+```
+
+---
+
 #### Pass 状態：ゼロコスト JSON 変換
 
 Pass 状態は**Lambdaもコンピュートも使わず**、入力を加工して次の状態に渡せる。
@@ -1660,6 +1845,78 @@ Bedrock Agent（enableTrace: true）
   → ❌ CW で代替できるのにオーバーエンジニアリング
 ```
 
+---
+
+## AWS X-Ray の詳細（AIP-83）
+
+### X-Ray の役割
+
+**分散トレーシングサービス。** リクエストが複数のマイクロサービス・AWS サービスを横断する際の経路・レイテンシーを可視化する。
+
+```
+通常のログ分析：
+  「サービスAのログ」「サービスBのログ」を別々に見る
+  → サービス間の依存関係やボトルネックが見えにくい
+
+X-Ray 分散トレーシング：
+  1つのリクエストが A → B → Bedrock と流れる全経路を
+  1つのトレースとして追跡・可視化
+  → どのサービスで何ミリ秒かかっているか一目でわかる
+  → サービスマップを自動生成（依存関係の視覚化）
+```
+
+### アノテーション vs メタデータ（重要）
+
+| | アノテーション（Annotation） | メタデータ（Metadata） |
+|---|---|---|
+| **インデックス** | ✅ される | ❌ されない |
+| **フィルタ検索** | ✅ 高速検索可能 | ❌ 検索不可 |
+| **用途** | FM の種類・ユーザーIDなど「検索したい属性」 | デバッグ用の詳細情報 |
+
+```python
+# アノテーションの付与例（FM別分析に使う）
+subsegment.put_annotation("model_id", "anthropic.claude-3-sonnet")
+subsegment.put_annotation("department", "sales")
+
+# → X-Ray コンソールで "model_id = claude" でフィルタリングして
+#   Claude だけのレスポンスタイム統計を抽出できる
+```
+
+### AWS SDK 標準リトライモード（AIP-83）
+
+| モード | 内容 |
+|---|---|
+| **legacy** | 旧来の固定リトライ。ジッターなし |
+| **standard** | ジッター付きエクスポネンシャルバックオフ。**推奨** |
+| **adaptive** | クライアント側レートリミッティングも行う。実験的機能 |
+
+→ **「スロットリング時のリトライ集中を防ぐ」→ standard モード** が正解
+
+### CloudWatch ServiceLens とは
+
+X-Ray + CloudWatch + AWS Health を統合したダッシュボード機能。
+
+```
+ServiceLens が提供するもの：
+  ✅ サービスマップ（X-Ray ベース）
+  ✅ 各サービスのメトリクス統合表示
+  ✅ アラームとトレースの相関表示
+
+ServiceLens の限界：
+  ❌ FM別のフィルタリングには X-Ray アノテーションの付与が別途必要
+  ❌ ServiceLens だけではカスタム属性での相関分析はできない
+```
+
+### CloudTrail vs X-Ray（試験で混同しやすい）
+
+| | AWS CloudTrail | AWS X-Ray |
+|---|---|---|
+| **目的** | 監査・ガバナンス（誰がいつ何をしたか） | パフォーマンス分析（どこで遅いか） |
+| **記録内容** | API呼び出しイベントログ | リクエストのセグメント・レイテンシー |
+| **レイテンシー計測** | ❌ | ✅ |
+| **サービスマップ** | ❌ | ✅ |
+| **フィルタリング** | 基本的なフィールド検索 | アノテーションによる高速フィルタ |
+
 ## Bedrock プライベート接続 × データレイク列単位制御（AIP-58）
 
 ### Bedrock へのプライベート接続：インターフェイス VPC エンドポイント
@@ -2227,3 +2484,141 @@ ef_search（HNSWパラメータ）を上げても 100% recall は保証されな
   → ❌ Neptune DatabaseはネイティブなベクトルSimilarity Search機能を持たない
     （Neptune Analyticsは別サービスでベクトル検索対応）
 ```
+
+---
+
+## Amazon Textract：対応形式とフォーム/テーブル抽出（AIP-75）
+
+### Textract が対応している入力形式
+
+**PDFだけではない。スキャンした紙書類の画像にも対応。**
+
+| 形式 | 対応 |
+|---|---|
+| スキャン書類画像（JPEG / PNG / TIFF） | ✅ |
+| PDF（スキャン・デジタル両方） | ✅ |
+
+→ 「紙の請求書類をスキャンし」という問題文が出ても Textract が正解になる。
+
+### Textract の特有機能
+
+```
+通常のOCR：テキストを読み取るだけ
+Textract：
+  ├─ フォーム抽出：「氏名：田中太郎」のようなキーと値のペアを構造化データで取得
+  ├─ テーブル抽出：行列形式のデータをそのまま取得
+  └─ 各フィールドに信頼度スコア（0.0〜1.0）が付与
+                  → Amazon A2I の閾値判定に使える
+```
+
+### Textract の信頼度スコア（重要）
+
+Textract は抽出結果の**各フィールドに信頼度スコア（0.0〜1.0）を自動付与**する。
+
+```
+抽出結果の例：
+{
+  "BlockType": "KEY_VALUE_SET",
+  "Key": "氏名",
+  "Value": "田中太郎",
+  "Confidence": 0.94   ← これが信頼度スコア
+}
+```
+
+- スコアが高い（0.9以上） → 自動処理を継続
+- スコアが低い（しきい値未満） → A2I ヒューマンレビューへ自動転送
+
+### Textract × A2I の連携（信頼度スコアを活用）
+
+```
+Textract で書類を抽出
+  ↓
+各フィールドに信頼度スコアが付く
+  ↓ しきい値を下回った場合
+Amazon A2I ヒューマンレビューワークフローに自動転送
+  ↓
+同一リージョンの担当者がレビュー用UIで確認・修正
+  ↓
+検証済みデータとして次のステップへ
+```
+
+### ⚠️ Rekognition との混同注意
+
+| | Textract | Rekognition |
+|---|---|---|
+| **用途** | 文書・書類からテキスト/フォーム/テーブルを抽出 | 画像内のオブジェクト・顔・シーン・コンテンツ検出 |
+| **書類のOCR** | ✅ | ❌（テキスト検出はできるが構造認識なし） |
+| **フォーム抽出** | ✅ | ❌ |
+| **コンテンツモデレーション** | ❌ | ✅ |
+
+→ 書類から構造化データを取る → **Textract**  
+→ 画像の有害コンテンツ検出 → **Rekognition**
+
+---
+
+## Lambda + Comprehend による PII リアルタイムマスキング（AIP-75）
+
+### ⚠️ 試験の読み方：「Lambda でPIIをマスキング」= Comprehend を呼んでいる前提
+
+**問題文に Comprehend が明記されていなくても、Lambda = Comprehend の薄いラッパーとして読む。**
+
+```
+なぜか：
+  Lambda 単体に PII 検出機能はない
+  → 「Lambda でマスキング」と書かれていたら
+    暗黙的に Comprehend.detect_pii_entities() を内部で呼んでいる前提
+  
+  「自前実装」ではなく「マネージドサービス（Comprehend）呼び出しの実装」
+
+試験での判断：
+  「Lambda でPIIをマスキング」→ ✅ マネージド（Comprehend）活用
+  「Macie でPIIをマスキング」 → ❌ Macieはマスキング機能なし（検出のみ）
+```
+
+### これはアンチパターンではなく標準パターン
+
+```
+標準パターン（正解）：
+  Textract で抽出した構造化データ
+    ↓
+  Lambda（同期処理）
+    → Comprehend.detect_pii_entities() でPII箇所を検出
+    → 検出した位置を *** または [MASKED] に置換
+    ↓
+  マスキング済みデータを FM（Bedrock）に送信
+
+特徴：リアルタイム・低レイテンシー・サーバーレス
+```
+
+### Macie がこの用途でアンチパターンになる理由
+
+```
+Amazon Macie：
+  ├─ S3バケット全体を定期バッチスキャン
+  ├─ PIIを「検出・分類・レポート」する
+  └─ データをリアルタイムにマスキング・編集する機能はない ❌
+
+→ FM入力前のリアルタイムPII除去には使えない
+→ 「S3に保存されたデータの可視性・コンプライアンス監視」には使える
+```
+
+### AIP-75 の選択肢3つの役割分担まとめ
+
+```
+① Textract + A2I（同一リージョン運用）
+   → スキャン書類の構造化抽出 + 低信頼度のヒューマンレビュー
+
+② Lambda + Comprehend（PII検出→マスキング）+ Bedrock ガードレール + IAM（リージョン制限）
+   → FM入力前のPII除去 + データレジデンシー担保
+
+③ Glue Data Quality + Step Functions（オーケストレーション）+ Bedrock呼び出し
+   → 構造化データの品質検証 → プロンプト変換 → FM呼び出し → 判定
+```
+
+### ⚠️ 不正解の選択肢の落とし穴
+
+| 選択肢 | 何が問題か |
+|---|---|
+| **Rekognition Custom Labels + Comprehend + SNS** | Rekognitionにフォーム/テーブル抽出機能なし。SNS通知はレビューUIではない（A2Iとは別物） |
+| **Macie + Config + CloudWatch** | MacieはリアルタイムPIIマスキング不可。FM呼び出しパイプラインが欠落 |
+| **SageMaker カスタムOCR** | Textractが存在するのに自前OCRモデルを作るのは過剰設計 |
