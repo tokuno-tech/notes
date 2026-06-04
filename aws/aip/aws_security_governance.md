@@ -392,3 +392,71 @@ S3（メールデータ）
 | 「S3内の機密データの存在を把握したい」 | **Macie**（ただしマスキングはしない） |
 | 「スキャンされたPDF・画像からテキスト抽出」 | **Textract** |
 | 「自然言語でエンタープライズ検索」 | **Kendra** |
+
+---
+
+## AWS Well-Architected 3点セット
+
+ベストプラクティス系の問題で混同しやすい3つを整理。
+
+### ① Well-Architected Framework（フレームワーク）
+
+**= AWSの設計思想・ベストプラクティス集（ドキュメント）**
+
+6つの柱：
+1. 運用上の優秀性
+2. セキュリティ
+3. 信頼性
+4. パフォーマンス効率
+5. コスト最適化
+6. 持続可能性
+
+→ ホワイトペーパーで読む「教科書」。
+
+### ② Well-Architected Lens（レンズ）
+
+**= 特定分野向けの追加ガイドライン（ドキュメント）**
+
+- **Generative AI Lens** ← AIP頻出
+- Machine Learning Lens
+- SaaS Lens / Financial Services Lens / IoT Lens など
+
+→ Frameworkに「メガネをかけて分野特化の観点を追加」するイメージ。中身はやはり設計思想。
+
+### ③ Well-Architected Tool（WA Tool）
+
+**= 自分のシステムを上記基準で自己診断するAWSコンソール上のツール**
+
+- マネジメントコンソールから利用
+- ワークロード（自分のシステム）を登録 → 質問票に回答
+- 「高リスク項目」「中リスク項目」を自動レポート
+- **Lensを適用すると追加質問が増える**（例: Generative AI Lens適用 → AI特化の質問追加）
+
+→ 設計思想を「やってるか？」と質問してくれる**自動レビュー官**。リソースは作らない。
+
+### 関係性
+
+```
+Framework（教科書）         ─┐
+                            ├─→ WA Tool（試験官）が「やってる？」と質問
+Generative AI Lens（追加教科書）─┘
+```
+
+| ツール | 役割 |
+|---|---|
+| Framework / Lens | 何をすべきか（What） |
+| **WA Tool** | やってるか診断（Check） |
+| CloudFormation / CDK | リソースを作る（Build） |
+| Trusted Advisor | 既存リソースの運用状況チェック |
+| AWS Config | リソースの設定変更を監視 |
+
+### 試験での選び方
+
+| シナリオ | 答え |
+|---|---|
+| 「AI実装がベストプラクティスに従っているか確認」 | **WA Tool + Generative AI Lens** |
+| 「AWS推奨の設計原則を学びたい」 | **Well-Architected Framework** |
+| 「MLワークロードの設計を見直したい」 | **WA Tool + ML Lens** |
+
+**ポイント**：「Lens」が出たら「分野特化の追加ガイドライン」、「Tool」が出たら「診断アプリ」と即変換。
+
