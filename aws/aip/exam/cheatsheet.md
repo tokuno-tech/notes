@@ -13,6 +13,9 @@
 
 - レスポンスストリーミングが要件 → **Lambda Function URL（RESPONSE_STREAM）**。API Gateway HTTP API は非対応（AIP-25）
 - サービス間（M2M）の API 認証 → **IAM ロール + SigV4**。Cognito は人間のユーザー向け（AIP-25）
+- 再試行OK → **429 / 500 / 503**（一時的な問題）。再試行NG → **400 / 401 / 403**（リクエスト・権限の問題）（Task 2.4）
+- 「再試行間隔を分散させる」→ **ジッター付き指数バックオフ**。線形リトライは障害長期化で負荷累積するため NG（Task 2.4）
+- API Gateway「検証」→ **リクエスト検証ツール（JSON スキーマ）**。「変換」→ **マッピングテンプレート**（Task 2.4）
 
 ## RAG・Knowledge Base
 

@@ -491,3 +491,69 @@ model = bedrock.ProvisionedModel.fromProvisionedModelArn(
 | 「期待出力と比較して検証」 | **Lambda** |
 
 ---
+
+## グレースフルデグラデーション（Graceful Degradation）（Task 2.4）
+
+**「一部が壊れても完全停止せず、機能を縮退させながら動き続けること」**
+
+### フォールバックパス（段階的縮退）
+
+```
+① プライマリモデル（Claude Sonnet）
+  ↓ 障害
+② 小型モデル（Claude Haiku）
+  ↓ 障害
+③ キャッシュ済みの過去回答を返す
+  ↓ キャッシュなし
+④ 固定の静的レスポンス（「現在混雑中です」）
+```
+
+各段階に「移行する品質しきい値」と「移行ロジック」を定義する。
+
+---
+
+## HTTP接続プーリング（Task 2.4）
+
+AWS SDK の HTTP クライアント（boto3 内部）レベルで管理する。**データベース接続プールと同じ概念**。
+
+```python
+from botocore.config import Config
+config = Config(max_pool_connections=20)
+client = boto3.client('bedrock-runtime', config=config)
+```
+
+- リクエストのたびに TCP コネクションを張り直さず使い回す → レイテンシー削減
+- Redis / ElastiCache / API Gateway の設定ではない
+
+---
+
+## API Gateway エラーコード分類（Task 2.4）
+
+再試行の可否を HTTPステータスコードで判断する。
+
+| エラーコード | 意味 | 再試行 |
+|---|---|---|
+| **429** | Too Many Requests（スロットリング） | ✅ 可（ジッター付き指数バックオフ） |
+| **500** | Internal Server Error | ✅ 可 |
+| **503** | Service Unavailable | ✅ 可 |
+| **400** | Bad Request（リクエスト不正） | ❌ 不可（直さないと永遠に失敗） |
+| **401** | Unauthorized（認証失敗） | ❌ 不可 |
+| **403** | Forbidden（権限なし） | ❌ 不可 |
+
+Bedrock で最頻出は **429**（クォータ超過）。
+
+---
+
+## API Gateway：マッピングテンプレート vs リクエスト検証ツール（Task 2.4）
+
+```
+リクエスト検証ツール（JSON スキーマ）：
+  「門番」→ 必須フィールド・型・サイズを検証してBedrock到達前に弾く
+
+マッピングテンプレート：
+  「翻訳者」→ リクエストの形式を変換するだけ。検証はしない
+```
+
+→ 詳細: [exam/traps.md](../exam/traps.md)
+
+---

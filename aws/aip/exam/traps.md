@@ -4,6 +4,7 @@
 
 ## よくある引っかけ（1行サマリー + 詳細リンク）
 
+- **API Gateway リクエスト検証ツール（JSON スキーマ）** は「門番」（必須フィールド・型・サイズを検証して弾く）。**マッピングテンプレート**は「翻訳者」（形を変えるだけ、検証しない）→ 詳細: [topics/bedrock_core.md](../topics/bedrock_core.md)（Task 2.4）
 - **Kendra の関連性スコア** は検索結果の確信度であって、RAG の評価メトリクスではない → 詳細: [topics/bedrock_guardrails_eval.md](../topics/bedrock_guardrails_eval.md)（AIP-79）
 - **CloudWatch Synthetics** は外形監視（カナリア）であって、LLM 出力の品質評価ではない → 詳細: [topics/bedrock_guardrails_eval.md](../topics/bedrock_guardrails_eval.md)（AIP-79）
 - **Cognito** は「人間のユーザー向け認証」。サービス間（M2M）の API 認証は IAM ロール + SigV4 → 詳細: [mistakes.md](./mistakes.md)（AIP-25）
