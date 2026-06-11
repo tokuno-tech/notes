@@ -399,3 +399,130 @@ Reasoning → Action → Observation（結果確認）→ Reasoning → ...
 | シングルエージェント | モノリシック、スケールしない |
 | P2P直接通信 | エージェント数が増えると調整が指数的に複雑化 |
 | Lambdaのみ | ステート管理・高度なオーケストレーションが欠如 |
+
+## AWS Amplify / AppSync / Amplify AI Kit（AIP-31）
+
+### AWS Amplify とは
+
+```
+AWS Amplify
+  = Web・モバイルアプリのフロントエンド開発を加速するフルスタックプラットフォーム
+  = React・Next.js・Vue などのフレームワークと統合
+  = バックエンド（認証・API・ストレージ）をコードから宣言的に構築できる
+  = Amplify Hosting でフロントエンドを S3 + CloudFront でホスト
+
+イメージ：「AWSのFirebase」的なポジション
+  → バックエンドを意識せずにフロントエンドから書けるようにするツール群
+```
+
+---
+
+### AWS AppSync とは
+
+```
+AWS AppSync
+  = フルマネージドの GraphQL API サービス
+  = REST API（API Gateway）の GraphQL 版に相当
+
+GraphQL の3種類の操作
+  Query      → データ取得（REST の GET）
+  Mutation   → データ更新（REST の POST/PUT/DELETE）
+  Subscription → リアルタイム更新の購読（REST には相当なし）
+
+Subscription の仕組み
+  → WebSocket で接続を確立
+  → バックエンドで Mutation が発行されるたびに、購読中のクライアントへ自動でプッシュ
+  → クライアント側はポーリング不要でリアルタイムにデータを受け取れる
+```
+
+**試験での位置づけ**：「GraphQL + リアルタイム通信 + AWS」と来たら AppSync を思い浮かべる。
+
+---
+
+### AWS Amplify AI Kit とは
+
+```
+Amplify AI Kit
+  = Amplify Gen 2 に組み込まれた AI 機能セット
+  = Amazon Bedrock との接続・ストリーミングを宣言的に設定できる
+
+できること
+  ① Bedrock との接続設定（モデル指定・プロンプト定義）
+  ② AppSync Subscription を通じたストリーミングレスポンスの有効化
+  ③ React 向けフック（useAIConversation）でストリーミング状態管理を自動化
+
+開発者がやること
+  → amplify/ai/ に conversation ルートを定義するだけ
+  → Bedrock との接続・WebSocket の管理・チャンク受信はフレームワークが自動処理
+```
+
+---
+
+### AIP-31 の正解構成と不正解パターン
+
+**問題**：AppSync + Lambda（同期）で Bedrock を呼び出すと「表示まで長時間待つ」「複雑な質問でタイムアウト」が発生
+
+**根本原因**：同期一括返却（全文生成完了まで何も返さない）
+
+**正解**：Amplify AI Kit + AppSync Subscription → ストリーミングで逐次描画
+
+```
+[Before] 同期方式
+  ユーザー → Lambda → Bedrock（全文生成） → 一括返却 → 画面表示
+  問題：数十秒間 画面が空のまま / タイムアウト
+
+[After] ストリーミング方式
+  ユーザー → AppSync Subscription（WebSocket）
+          → Bedrock がトークン生成するたびにチャンクをプッシュ
+          → フロントエンドで逐次描画
+  効果：TTFT（最初の文字表示まで）が大幅短縮 / タイムアウト回避
+```
+
+| 不正解選択肢 | 理由 |
+|---|---|
+| Lambda のメモリ増強 + プロビジョンドコンカレンシー | Bedrock 側の生成時間は変わらない。同期構造のまま |
+| API Gateway REST + Step Functions + ポーリング | アーキテクチャを全面刷新。ポーリングは体感速度改善が限定的 |
+| ElastiCache でキャッシュ | 自然言語クエリは完全一致ほぼなし。キャッシュミス時は同期問題が残る |
+
+### 試験での判断軸
+
+- 「Amplify + AppSync 構成で応答が遅い・タイムアウト」→ **Amplify AI Kit + Subscription ストリーミング**
+- 「GraphQL でリアルタイム更新」→ **AppSync Subscription（WebSocket）**
+- 「React から Bedrock をストリーミング接続」→ **useAIConversation フック**
+
+---
+
+### AppSync の Resolver とは（補足）
+
+```
+GraphQL のフィールドごとに「どこからデータを取ってくるか」を定義した関数。
+REST で言う Controller に相当。
+
+クライアント → GraphQL Query → AppSync → Resolver 実行 → DB/API → データ返却
+```
+
+**Resolver の実態**
+- DB 接続・SQL・API 呼び出しは**自分で書く**（フレームワークが自動でやるわけではない）
+- バリデーション・ビジネスロジックも Resolver 内、または Resolver から呼ぶ Service 層に書く
+- 認証情報は `context`（リクエスト情報）を通じて Resolver に渡される
+
+**AppSync がやってくれること（Resolver の自動生成）**
+
+| データソース | Resolver の扱い |
+|---|---|
+| **DynamoDB** | AppSync が CRUD Resolver を**自動生成**。コード不要 |
+| **Lambda** | Lambda 関数自体が Resolver 扱い。ロジックは Lambda に書く |
+| **RDS（Aurora）** | SQL は自分で書く。自動生成なし |
+| **Bedrock（Amplify AI Kit）** | スキーマ定義だけで Resolver を自動生成 |
+
+**DynamoDB と自動生成の相性が良い理由**
+- DynamoDB = キーバリュー型 → 操作パターンが「キーで GET / PUT / DELETE」のみ
+- パターンが有限なので AppSync が網羅的に自動生成できる
+- SQL の JOIN や複雑な WHERE 条件は無限にあり得るため RDS では自動生成が成立しない
+
+**試験での識別ポイント**
+- 「複雑なビジネスロジックが必要」→ Lambda Resolver を使う構成
+- 「DynamoDB + AppSync」→ カスタム Resolver 不要・最小実装
+- AppSync の Resolver 自動生成 = DynamoDB の単純さがあってこそ成立する
+
+---
