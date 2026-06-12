@@ -69,3 +69,45 @@ CloudWatch Logs に出力される内容
 ---
 
 （元の文脈: [topics/bedrock_guardrails_eval.md](../topics/bedrock_guardrails_eval.md)）
+
+## 略語「SSE」の2つの意味（Task 2.5）
+
+ストリーミングの文脈と暗号化の文脈で同じ略語が出る。Skill Builder の和訳でも混同があった。
+
+- **Server-Sent Events**：ストリーミング応答の配信方式。`Content-Type: text/event-stream`
+- **Server-Side Encryption**：S3/DynamoDB のサーバー側暗号化（SSE-S3 / SSE-KMS）
+
+「ストリーミング・チャット・リアルタイム」の文脈 → Server-Sent Events / 「保存データ・暗号化」の文脈 → Server-Side Encryption
+
+## 「合成モニタリング」と「複合アラーム」（Task 2.5）
+
+- 合成（Synthetic）= **人工ユーザー**が定期的に叩く外形監視（CloudWatch Synthetics / Canary）。「ユーザー影響前に検知」
+- 複合（Composite）= 複数アラームの **AND/OR 結合**（誤検知削減）
+
+「合成＝複数を合わせる」と誤読しない。合わせるのは複合アラームの方。
+
+---
+
+## Amazon Pinpoint vs Bedrock（メール生成）（Task 2.5）
+
+同じ「メール送信」文脈で両方出るが目的が全く違う。
+
+- **Pinpoint** = セグメント × テンプレートの**一斉配信**。「30代・東京在住・購入履歴あり」への定型メール。内容の動的生成はできない
+- **Bedrock + Lambda（+ SES）** = 「この顧客の通話メモを読んで文章を生成して送る」。**個別・動的・パーソナライズ**
+
+「顧客とのやり取りのメモに基づいてパーソナライズ」→ Bedrock。「セグメントにテンプレート配信」→ Pinpoint。
+
+## Bedrock Prompt Flows vs Bedrock Agents（Task 2.5）
+
+同じ「Bedrockで複数ステップを処理」に見えるが、自律性が根本的に異なる。
+
+| | Prompt Flows | Bedrock Agents |
+|---|---|---|
+| フローの決定者 | **人間が事前に GUI でノードを設計** | **FMが実行時に自律的にツールを選択** |
+| 対象ユーザー | 非技術者・ノーコード | 開発者 |
+| 複雑さ | 固定フロー（条件分岐・Lambda呼び出しは可） | 動的推論・マルチステップ |
+| キーワード | 「ノーコード・非技術者が自分で設計」「固定ステップ」 | 「自律的・複雑なタスク・マルチステップ推論」 |
+
+Prompt Flows も Lambda ノード経由で複雑な処理を呼べるが「どのツールをいつ呼ぶかをFMが決める」のは Agents のみ。
+
+---

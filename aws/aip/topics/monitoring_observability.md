@@ -567,3 +567,66 @@ user_tier = "premium"
 ```
 
 ---
+
+## AI導入効果のKPI計測（カスタムメトリクス＋有意性検定）（Task 2.5）
+
+**ビジネスKPI（平均処理時間・一次解決率等）は CloudWatch に自動では存在しない** → アプリ側が業務イベントのたびに `put_metric_data` で発行する（= カスタムメトリクス）。
+
+```python
+cloudwatch.put_metric_data(
+    Namespace="ContactCenter",
+    MetricData=[{
+        "MetricName": "HandleTimeMinutes",
+        "Dimensions": [{"Name": "Group", "Value": "ai-assisted"}],  # A/B群のタグ
+        "Value": 9.8
+    }]
+)
+```
+
+**AI導入の改善効果を証明する3点セット：**
+
+1. **導入前ベースライン**：導入前にKPIを記録しておく（なければ比較不能）
+2. **A/Bテスト**：AI支援あり群 / なし群（対照群）に分け、Dimension で系列を分離
+3. **統計的有意性検定（t検定）**：p < 0.05 なら「偶然ではなくAI起因の改善」と判定。
+   p ≥ 0.05 なら偶然の範囲（「たまたま簡単な問い合わせが多かった月」かもしれない）
+
+- 計算は CloudWatch からデータを取り出して scipy `ttest_ind()` 等。試験では計算でなく**概念**（対照群との比較＋有意性検定）が問われる
+- bedrock_resilience.md の A/Bテスト（モデル比較）と同じ仕組みの**ビジネス効果測定**版
+
+---
+
+## 合成モニタリング vs 複合アラーム（Task 2.5）
+
+**「合成」の意味がまったく違う**ので注意（→ [exam/traps.md](../exam/traps.md)）。
+
+| | 何をするか | キーワード |
+|---|---|---|
+| **合成モニタリング**（CloudWatch Synthetics / Canary） | Synthetic =「人工的」。偽ユーザーとして代表的プロンプトを定期実行し、**ユーザー影響前に**劣化を検知 | 能動的・外形監視・劣化の先回り検知 |
+| **複合アラーム**（Composite Alarm） | 複数アラームを AND/OR で結合。両方満たしたときだけ通知 | 誤検知削減・条件の絞り込み |
+
+```python
+# Canary スクリプト例（5分ごと自動実行）
+response = bedrock.converse(messages=[{"role":"user","content":[{"text":"S3を一文で説明"}]}])
+assert latency < 3000          # レイテンシー劣化チェック
+assert "ストレージ" in output   # 品質チェック
+```
+
+## GenAI のエンドツーエンド・ログ記録パイプライン（Task 2.5）
+
+「この応答が変だった理由」を**前処理〜後処理まで全段階**で追跡できるようにする構成。
+
+```
+記録対象：
+① 前処理（生入力・PIIマスク後）② RAG検索結果（取得文書・スコア）
+③ 最終プロンプト全体 ④ モデル出力・トークン数 ⑤ 後処理（ガードレール適用結果）
+
+構成：
+Bedrock Invocation Logging → CloudWatch Logs（Logs Insights で横断クエリ）
+Lambda（前後処理ログ）→ Kinesis Firehose → S3 → Athena で横断分析
+```
+
+- **前提：Bedrock のモデル呼び出しログ記録（Invocation Logging）はデフォルト OFF** → 明示的に有効化しないと Logs Insights で分析するログ自体が存在しない
+- Logs Insights のフィルタ例：`latencyMs > 5000`（高レイテンシー）/ `ThrottlingException`（エラー）/ `outputTokenCount > 3000`（予期しないトークン量）
+- **プロンプトレジストリ**（Bedrock Prompt Management）：バージョンごとに性能メトリクスを紐付け、「品質低下がどのプロンプトバージョンと一致するか」で原因特定（→ bedrock_agents.md）
+
+---
