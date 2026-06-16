@@ -97,6 +97,48 @@ CloudWatch Logs に出力される内容
 
 「顧客とのやり取りのメモに基づいてパーソナライズ」→ Bedrock。「セグメントにテンプレート配信」→ Pinpoint。
 
+## `StartAsyncInvoke` ≠ 汎用非同期推論（Domain 2 Practice）
+
+「非同期」という名前に引っ張られて、テキスト系モデルのバッチ処理に使おうとする罠。
+
+- **`StartAsyncInvoke`** = **Amazon Nova Reel（動画生成）専用**。他のモデルでは使えない
+- テキスト系モデルの非同期・バッチ推論 = **`CreateModelInvocationJob`**
+
+```
+❌ よくある誤解
+「Lambda から非同期に Bedrock を呼びたい → StartAsyncInvoke」
+
+✅ 正解
+「テキスト系モデルのバッチ推論 → CreateModelInvocationJob」
+「動画生成（Nova Reel）→ StartAsyncInvoke」
+```
+
+---
+
+## Lambda プロキシ統合の「非同期呼び出し」は低レイテンシー要件 NG（Domain 2 Practice 問題2.3）
+
+AWS Secrets Manager から OAuth 認証情報を取得して bearer token を生成する構成（選択肢C）は **セキュリティ的に正しい**。
+唯一の問題は「**Lambda プロキシ統合で Bedrock Agent を非同期に呼び出す**」こと。
+
+- 会話型・低レイテンシー要件 → **同期呼び出し**が必要
+- 非同期呼び出しはリアルタイム会話に対してレスポンスを返せない
+
+**見落としパターン**：「認証情報の保存方法（Secrets Manager）に引っかかり、本当の問題（非同期）を見逃す」
+
+---
+
+## Step Functions / Bedrock Flows は「疎結合」要件を満たさない（Domain 2 Practice）
+
+| 構成 | 疎結合か | 理由 |
+|------|---------|------|
+| Step Functions | ❌ | ステートマシン定義にツール呼び出しを直書き → ツール変更のたびに定義書き換え |
+| Bedrock Flows | ❌ | ノードを GUI で事前設計 → 動的なツール選択不可 |
+| Strands + MCP | ✅ | エージェントとツールが MCP 標準 I/F で接続 → ツール追加時にエージェント無変更 |
+
+「疎結合」「動的ツール選択」「新ツールを追加しやすい」→ **Strands + MCP**
+
+---
+
 ## Bedrock Prompt Flows vs Bedrock Agents（Task 2.5）
 
 同じ「Bedrockで複数ステップを処理」に見えるが、自律性が根本的に異なる。

@@ -594,3 +594,33 @@ Step3: リスク条項への対応策を提案
 - **WebSocket の接続維持**（長時間生成タスク）: アイドルタイムアウト 10〜30分、Ping/Pong 30〜60秒間隔
 
 ---
+
+## バッチ推論 API の使い分け（Domain 2 Practice）
+
+テキスト系モデルの非同期・バッチ推論と、Nova Reel の動画生成で API が異なる。混同しやすい。
+
+| API | 用途 | 対応モデル |
+|-----|------|-----------|
+| `InvokeModel` | リアルタイム同期推論 | テキスト・マルチモーダル全般 |
+| `InvokeModelWithResponseStream` | ストリーミング同期推論 | 同上 |
+| **`CreateModelInvocationJob`** | **テキスト系モデルのバッチ推論** | Nova / Claude 等 |
+| **`StartAsyncInvoke`** | **動画生成の非同期呼び出し** | **Nova Reel 専用** |
+
+### リアルタイム + バッチ 2系統アーキテクチャ
+
+```
+リアルタイム: API Gateway → Lambda → InvokeModel → 即返却
+                                                 （Lambda は結果を待つ）
+
+バッチ:       SQS → Lambda → CreateModelInvocationJob 起動して即 return
+                              ↑ ジョブは裏で動く。Lambda は完了を待たない
+                              ↑ Lambda 15分タイムアウトを超えるジョブも安全
+```
+
+**⚠️ Step Functions で2系統を1ステートマシンに収めようとすると失敗する**
+- Express ワークフロー（最大5分）→ バッチ処理時間を超える可能性
+- Standard ワークフロー（同期実行）→ 呼び出し元がバッチ完了まで長時間ブロック
+
+→ 応答時間が異なる2系統は **別アーキテクチャで捌く** のが正解
+
+---
