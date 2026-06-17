@@ -36,6 +36,38 @@ API Gateway WebSocket API（双方向・持続接続）→ オペレーター画
 
 ---
 
+## Amazon Comprehend：有害コンテンツ検出（Toxicity Detection）（Task 3.1）
+
+PII除去以外にも以下を検出できる。
+
+### 検出カテゴリ
+
+| カテゴリ | 内容 |
+|---|---|
+| **HATE_SPEECH** | ヘイトスピーチ |
+| **INSULT** | 侮辱 |
+| **SEXUAL** | 性的コンテンツ |
+| **VIOLENCE** | 暴力 |
+| **PROFANITY** | 冒涜的表現 |
+| **HARASSMENT** | 嫌がらせ |
+
+各カテゴリに **0.0〜1.0 の信頼スコア**が返る。
+
+### その他の検出機能
+
+| 機能 | 用途 |
+|---|---|
+| **感情分析**（Sentiment Analysis） | POSITIVE / NEGATIVE / NEUTRAL / MIXED + 怒り(ANGER)等の感情検出 |
+| **PII検出**（DetectPiiEntities） | 氏名・電話番号・クレジットカード番号等 |
+| **エンティティ認識** | PERSON / ORGANIZATION / LOCATION 等を抽出（特定個人への攻撃検出に活用） |
+| **インテント認識**（カスタム分類器） | ユーザーの意図をカテゴリに分類（cancel_reservation 等） |
+
+### 多層防御での役割
+
+Comprehend は「テキスト分類・属性抽出」が得意。Bedrock ガードレールが「FM文脈での安全性判断」を担当する棲み分け。
+
+---
+
 ## Amazon Q Business：S3 データソースのアクセス制御（AIP-60）
 
 ### 重要な前提：Q Business のアクセス制御レイヤー
