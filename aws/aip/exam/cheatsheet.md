@@ -85,3 +85,6 @@
 - 「ユーザー影響前に劣化検知」→ **Synthetics**（合成=人工ユーザーの定期実行）/ 「複数アラームを AND/OR」→ **複合アラーム**
 - Logs Insights で分析する前提として **Bedrock モデル呼び出しログ記録はデフォルト OFF**（明示的に有効化）
 - **FM アプリのトラブルシューティング3点セット**：どこが遅いか → **X-Ray**（サブセグメント）/ ログの検索・集計 → **Logs Insights** / AI固有パターンの認識・修正提案 → **Q Developer**（Logs Insights だけでは「知見」に弱い）
+- 「Bedrock の包括的セキュリティ」→ **IAM + CloudTrail + CloudWatch**。CloudTrail が監査＝データ保護を担う。暗号化はデフォルト済みなので選択肢に出たら罠
+- 「保護された AI 環境」で「包括的セキュリティ」の2択 → Lake Formation（データ制御）+ CloudWatch（監視）が軸。パブリックサブネットは即除外
+- 「包括的コンプライアンス」の2択 → **Model Cards（文書化）+ Glue（データ追跡）**のセット。Model Cards はリネージュ追跡ではない

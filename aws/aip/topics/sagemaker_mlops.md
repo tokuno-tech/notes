@@ -544,3 +544,54 @@ Processing Jobでできること：
 試験での識別：
 - 「データ整形・検証を効率的に」→ **Lambda**（軽量）または **SageMaker Processing Job**（ML前処理特化）
 - 「大規模バッチ処理」→ **EMR**（Processing Jobより重い処理向け）
+
+---
+
+## SageMaker ML Lineage Tracking（Task 3.3）
+
+ML の学習から推論まで全工程を DAG（有向非巡回グラフ）構造で記録する仕組み。
+
+| エンティティ | 意味 | 例 |
+|---|---|---|
+| **Artifact** | 成果物の実体 | S3 データ・モデルファイル |
+| **Action** | 操作・イベント | 学習・評価・デプロイ |
+| **Context** | グループ・文脈 | 実験・パイプライン |
+
+```
+S3生データ(Artifact) → 学習(Action) → モデルv1(Artifact)
+                                            ↓
+                                  評価(Action) → メトリクス(Artifact)
+                                            ↓
+                                  デプロイ(Action) → エンドポイント(Artifact)
+```
+
+- `create_artifact()` / `create_action()` / `create_context()` でカスタムエンティティを追加
+- `add_association()` でクロスアカウントの関連付けも可能（適切な IAM ロール設定が必要）
+
+**試験：「モデルの来歴情報を追跡」→ SageMaker Lineage Tracking**
+
+---
+
+## SageMaker Model Cards（Task 3.3）
+
+モデルの特性・想定ユースケース・制約・リスク・評価結果を構造化文書として記録する機能。
+
+- `create_model_card()` / `update_model_card()` / `export_model_card()` API で自動化可能
+- CI/CD パイプラインに組み込んでモデル登録時に自動生成・更新
+- 規制当局への説明責任・監査対応に使う
+
+**⚠️ Model Cards はデータリネージュ追跡ではなく「モデルの文書化」ツール**
+
+**試験：「モデルの特性・用途・制約を文書化」→ SageMaker Model Cards**
+
+---
+
+## SageMaker Clarify バイアス指標（Task 3.3）
+
+| 指標 | 略称 | 意味 | 値の解釈 |
+|---|---|---|---|
+| ラベルにおける正の比率の差 | **DPPL** | 属性間で陽性判定率がどれだけ違うか | 0に近いほど公平 |
+| 差別的効果 | **DI** | マイノリティ ÷ 多数派の陽性率 | 1に近いほど公平（0.8未満で要注意） |
+| 条件付き拒否の差 | **DCR** | 実際は陽性なのに拒否された割合の差 | 0に近いほど公平 |
+
+**試験：バイアス検出指標の名前レベルで問われることはまずない。「バイアス検出 → Clarify」の対応を押さえれば十分**
