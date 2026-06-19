@@ -1116,3 +1116,63 @@ Step Functions スケジュール実行：
 |---|---|
 | **CloudWatch Anomaly Detection** | 通常パターンを ML で学習 → 急激なリクエスト数増加等を自動検出 |
 | **GuardDuty** | 深夜に普段アクセスしない IAM ロールが Bedrock を呼び出した等の脅威検知 |
+
+---
+
+## AWS Audit Manager（Task 3.4 動画レクチャー）
+
+### 一言で
+コンプライアンス証拠を自動収集・監査レポートを生成するサービス。CloudTrail・AWS Config・Security Hub からエビデンスを集約する。
+
+### 生成 AI 向けフレームワーク
+**Generative AI Best Practices Framework v2**（2024年6月アップデート）が組み込まれており、Bedrock・SageMaker を対象に110のコントロールを提供。
+
+| 項目 | 内容 |
+|---|---|
+| 自動コントロール | 72個（Bedrock ListCustomModels API・SageMaker モニタリング等） |
+| 手動コントロール | 38個 |
+| カバー原則 | 責任・安全・公平・持続可能・レジリエンス・プライバシー・精度・セキュリティ（8原則） |
+
+### 他サービスとの違い
+
+| サービス | 役割 |
+|---|---|
+| **CloudTrail** | API 操作ログ（誰が何をいつ） |
+| **AWS Config** | リソース設定の変更追跡 |
+| **Audit Manager** | 上記2つを含む複数ソースからエビデンスを集約し監査レポートを生成 |
+| **SageMaker Model Cards** | モデル単体のメタデータ文書化（スコープが狭い） |
+
+### 試験での位置づけ
+- 新規顧客への提供は終了（既存顧客は継続利用可）
+- 動画レクチャーには登場するが、試験本番での出題優先度は低め
+- 「コンプライアンス証拠の自動収集・監査レポート生成」という概念として覚えておく
+- **2択で迷ったら**：個別サービスの監査ログ → CloudTrail、包括的なコンプライアンス報告書の自動生成 → Audit Manager
+
+---
+
+## Bedrock Guardrails 補足（Task 3.4）
+
+### ApplyGuardrail API
+
+モデル呼び出しを伴わずに、任意のテキストに単独でガードレールを適用できる独立した API。
+
+| 使いどころ | 例 |
+|---|---|
+| 外部 LLM の出力チェック | OpenAI 等の出力を Bedrock Guardrails で事後評価 |
+| 既存テキストのスキャン | DB に蓄積済みの回答ログを一括チェック |
+| 入力の事前検証 | Bedrock 呼び出し前に Lambda から単独で入力チェック |
+
+### ガードレール設定のバージョン管理
+
+- **CloudTrail**：ガードレールへの API 操作（変更・削除等）を自動記録
+- **Git / IaC**：ガードレール設定をコードとして管理し、PR レビュー → 承認 → CodePipeline でデプロイ
+- SageMaker Model Registry の承認フローと同じ考え方をガードレール設定に適用するイメージ
+
+---
+
+## CloudWatch カスタムメトリクス 名前空間ルール（Task 3.4 セルフチェック）
+
+- `AWS/Bedrock`・`AWS/SageMaker`・`AWS/Lambda` は AWS が予約済みの名前空間
+- カスタムメトリクスは **`AWS/` で始まらない**独自名前空間を使う（例：`MyApp/FairnessMetrics`）
+- 信頼度スコア・引用頻度・バイアス指標などは全てカスタム名前空間で `PutMetricData` で送る
+- **2択で迷ったら**：「信頼度・公平性などモデル動作の透明性系」→ カスタム名前空間（`AWS/Bedrock` は不正解）
