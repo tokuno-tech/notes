@@ -144,7 +144,7 @@ Lambda 関数 URL（Function URL）：
 | API Gateway WebSocket + Lambda | △ メッセージベース | 2〜4 | 高（接続管理要） |
 | CloudFront + Lambda Function URL | ✅ | 3 | 中（WAF等必要な場合） |
 
-### CloudFront Functions とは（引っかけ選択肢）
+### CloudFront Functions とは
 
 ```
 CloudFront Functions：
@@ -178,7 +178,7 @@ CloudFront Functions：
 - 保存データを暗号化
 - 数千同時ユーザーに低レイテンシ対応
 
-### 正解構成
+### 構成
 
 **Step Functions Standard（.waitForTaskToken）+ DynamoDB（オンデマンド + SSE）**
 
@@ -225,16 +225,6 @@ Task（.waitForTaskToken）でトークンを発行 → ステートマシン一
 ⑤ ステートマシンが【再開】し、output を次ステートへ引き渡す
 ```
 
-#### キーワード対訳（選択肢で見たらすぐ判断）
-
-| 試験の表現 | 意味するもの |
-|---|---|
-| 「外部システムの完了を待つ」 | `.waitForTaskToken` の適用シグナル |
-| 「一時停止してコールバックを待機」 | `.waitForTaskToken` |
-| 「ワークフローを再開する」 | `SendTaskSuccess` API の呼び出し |
-| 「ポーリングループで状態確認」 | 不正解パターン（無駄なコスト・複雑性） |
-| 「最大5分の制約がある」 | Express Workflow → 人間の応答待機に使えない |
-
 #### ポーリング方式との比較（なぜ `.waitForTaskToken` が優れているか）
 
 | 観点 | `.waitForTaskToken`（コールバック） | ポーリング（定期確認ループ） |
@@ -270,19 +260,6 @@ Task（.waitForTaskToken）でトークンを発行 → ステートマシン一
 | イベントストリーム処理（Kinesis/SQS連携） | **Express** | 高スループット向け。重複許容できるストリーム処理と相性◎ |
 | リアルタイムAPI応答オーケストレーション（〜秒） | **Express** | 5分以内に完結するなら低コスト |
 
-#### 試験での判断フロー
-
-```
-「人間の応答を待つ」「承認フロー」「数時間かかる処理」
-  → Standard 一択（Expressは5分でタイムアウト）
-
-「1日に何万回も実行される」「ストリーム処理」「短時間バッチ」
-  → Express を検討（状態遷移課金より実行時間課金の方が安い）
-
-「重複実行が許されない」「監査証跡が必要」
-  → Standard（Exactly-once + 実行履歴参照可能）
-```
-
 ### DynamoDB を選ぶ理由（対話履歴ストア）
 
 | 候補 | 評価 |
@@ -299,16 +276,6 @@ Task（.waitForTaskToken）でトークンを発行 → ステートマシン一
 - **サーバーサイド暗号化**：デフォルト有効（AWS所有キー / マネージドキー / CMKを選択）
 - 単一テーブル設計で会話履歴とメタデータをまとめると、1クエリで取得可能
 
-### 引っかけポイント
-
-| 選択肢 | 不正解の理由 |
-|---|---|
-| EventBridge + Lambda + S3 | 状態管理機構なし（Step Functionsを再発明）。S3はリアルタイム対話に遅い |
-| Step Functions Express + Aurora | Expressは5分上限で人間の応答待機に不適。RDBはキーバリュー用途に過剰 |
-| ECS Fargate（メモリで状態管理）+ ElastiCache | コンテナメモリ＝揮発性、ElastiCache＝揮発性。永続性要件を満たさない |
-
----
-
 ## Bedrock API 設計パターン（AIP-52 / AIP-53）
 
 ### Converse API vs InvokeModel API（AIP-52）
@@ -323,7 +290,6 @@ Task（.waitForTaskToken）でトークンを発行 → ステートマシン一
 | ツール呼び出し | `toolUse` で標準対応 | モデル固有の形式 |
 | 追加コスト | なし（トークン課金は同じ） | なし |
 
-**試験での判断軸**：
 ```
 「複数環境(Lambda / EKS)から統一APIで呼び出す」
 「マルチターン会話を外部DBなしで維持」
@@ -367,7 +333,6 @@ model = bedrock.ProvisionedModel.fromProvisionedModelArn(
 - 比較評価フェーズで複数モデルに使うと**コストが大幅増**
 - ARN ベースなのでモデル切り替えに手間がかかる
 
-**試験での判断軸**：
 ```
 「複数FMを比較評価」「コード変更なしに切り替え」「スタートアップ・低コスト」
   → fromFoundationModelId()（オンデマンド）
@@ -413,7 +378,7 @@ model = bedrock.ProvisionedModel.fromProvisionedModelArn(
 }
 ```
 
-### 推論パラメータ比較（引っかけ対策）
+### 推論パラメータ比較
 
 | パラメータ | 役割 | 「出力を止める」用途に使えるか |
 |---|---|---|
@@ -423,16 +388,6 @@ model = bedrock.ProvisionedModel.fromProvisionedModelArn(
 | top_p | 累積確率によるトークン絞り込み | ❌ 停止には無関係 |
 | max_tokens | 最大トークン数で強制終了 | △ 上限設定。フレーズ指定不可 |
 
-### 試験での識別キーワード
-
-| キーワード | 正解 |
-|---|---|
-| 「特定のフレーズが出たら停止」 | stop sequences |
-| 「出力のランダム性・創造性を調整」 | temperature |
-| 「トークンの多様性を制御」 | top_k / top_p |
-
----
-
 ## Amazon Nova モデル比較
 
 | モデル | モダリティ | 特徴 | 試験での注意点 |
@@ -441,7 +396,6 @@ model = bedrock.ProvisionedModel.fromProvisionedModelArn(
 | **Nova Lite** | テキスト・画像・動画 | 軽量・高速・低コスト | マルチモーダルで低コスト |
 | **Nova Pro** | テキスト・画像・動画 | 高性能・複雑タスク | 最高精度が必要な場合 |
 
-**⚠️ 試験の引っ掛けパターン**
 ```
 「動画・画像のメタデータ生成」でNova Microを選択肢に出す
 → Nova Micro = テキスト専用 → 即脱落
@@ -462,8 +416,6 @@ model = bedrock.ProvisionedModel.fromProvisionedModelArn(
   オンデマンド → 積み上がって割高
 ```
 
-**⚠️「コスト効率 = プロビジョンド」は罠。トラフィック量を確認してから判断。**
-
 | キーワード | 正解 |
 |---|---|
 | 「低トラフィック」「1日100件」「使った分だけ」 | **オンデマンド + Lambda** |
@@ -480,17 +432,6 @@ model = bedrock.ProvisionedModel.fromProvisionedModelArn(
 | **DynamoDB** | 会話履歴・状態の永続保存 |
 | **Lambda** | 出力検証・カスタムロジック |
 | **CloudWatch** | プロンプトリグレッション監視 |
-
-### 試験での識別キーワード
-
-| キーワード | 正解 |
-|---|---|
-| 「インテント認識」「ユーザーの意図を分類」 | **Comprehend カスタム分類** |
-| 「エッジケースをテスト」「テストケースを順番に実行」 | **Step Functions** |
-| 「プロンプト変更後の品質劣化を検知」「リグレッション」 | **CloudWatch メトリクス監視** |
-| 「期待出力と比較して検証」 | **Lambda** |
-
----
 
 ## グレースフルデグラデーション（Graceful Degradation）（Task 2.4）
 
@@ -572,8 +513,6 @@ Bedrock で最頻出は **429**（クォータ超過）。
 [会話1〜2の要約(50tok)][会話3][会話4][会話5][会話6]
  ↑ 重要度の低い部分は圧縮   ↑ 直近の詳細は保持
 ```
-
-**試験文言：**「トークン制限に近づいたら重要度の低いコンテキストを削除し、重要なコンテキストを保持」= スライディングウィンドウ
 
 ### プロンプトチェーン間のコンテキスト引き継ぎ
 
@@ -661,7 +600,5 @@ jsonschema.validate(fm_output, schema)  # 形式が違えばエラー → リト
 | **KB の score** | RAG検索時に自動返却（0.0〜1.0）。低スコアは「情報なし」と返す | RAG構成 |
 | **FM自己評価** | FMに `{"confidence": 0.xx}` を含むJSON出力させる | KBがない汎用Q&A |
 | **セマンティック類似性** | 回答と原典をベクトル化してコサイン類似度を比較 | ハルシネーション厳格検証 |
-
-**試験定番**：「ハルシネーション低減」→ **KB + セマンティック類似性（コサイン類似度）**
 
 ---
