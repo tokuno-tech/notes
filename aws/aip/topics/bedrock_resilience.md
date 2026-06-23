@@ -473,3 +473,204 @@ Bedrock Agent：
 過去のパフォーマンスに基づいて重みを動的に調整する。
 
 ---
+
+## セマンティックキャッシュ（アプリ層）（Task 4.1）
+
+Bedrockのプロンプトキャッシュ（KVキャッシュ）とは別に、**アプリ層で入力→回答のペアをキャッシュ**する仕組み。
+
+### キャッシュ種別の比較
+
+| 種別 | 判定方法 | FM呼ぶか | 実装場所 |
+|---|---|---|---|
+| **決定論的ハッシュ** | SHA-256で完全一致 | 呼ばない | CloudFront / ElastiCache |
+| **セマンティックキャッシュ** | embeddingの類似度 | 呼ばない | OpenSearch / ElastiCache |
+| **プロンプトキャッシュ（KV）** | 固定プレフィックス | 呼ぶ（計算省略） | Bedrockネイティブ |
+
+### セマンティックキャッシュ フロー
+
+```
+【MISS時（初回）】
+クエリ → embedding変換 → OpenSearchでk-NN検索 → 類似なし
+  → Bedrock FM呼び出し → 回答生成
+  → (クエリのembedding, 回答テキスト) をOpenSearchに保存
+
+【HIT時（2回目以降）】
+クエリ → embedding変換 → k-NN検索 → 類似度 > 閾値（例: 0.95）
+  → DBから回答テキストを返却（FMを呼ばない）
+```
+
+### 結果フィンガープリンティング
+
+**出力（回答テキスト）をSHA-256でハッシュ化し、保存フェーズで重複エントリを統合する**手法。
+
+- **HIT判定はしない**（セマンティックキャッシュが担う）
+- **主目的：重複排除**。別の入力から同じ回答が生成された場合にDBを統合してストレージ節約
+
+```
+FM回答テキスト → SHA-256 → 出力フィンガープリント
+  └─ 同じハッシュがDBに存在？
+      YES → 重複統合（例：「EC2とは？」と「EC2を説明して」が同一回答）
+      NO  → 新エントリとして保存（入力embedding + 回答テキスト + 出力hash）
+```
+
+### 階層型キャッシュアーキテクチャ
+
+```
+[リクエスト]
+      ↓
+L1: CloudFront エッジ（決定論的ハッシュ・完全一致のみ・超低レイテンシ）
+      ↓ MISS
+L2: ElastiCache（インメモリ・決定論的ハッシュ・ms単位）
+      ↓ MISS
+L3: OpenSearch（セマンティック類似検索・数十ms）
+      ↓ MISS
+Bedrock FM呼び出し → 結果をL1〜L3に書き戻す
+```
+
+### キャッシュ無効化ポリシー
+
+| 戦略 | 内容 | 適するケース |
+|---|---|---|
+| **TTL** | 一定時間後に自動削除 | FAQ（24h）・株価（60秒）など鮮度要件に応じて設定 |
+| **イベントベース** | モデル更新・ドキュメント更新時に関連エントリを明示削除 | モデル切替時の全キャッシュ無効化 |
+| **LRU** | アクセスが少ないエントリから自動削除 | ElastiCacheのデフォルト動作 |
+
+### CloudWatchキャッシュ分析
+
+```python
+# Lambdaでカスタムメトリクスを送信
+cloudwatch.put_metric_data(
+    Namespace='CacheMetrics',
+    MetricData=[
+        {'MetricName': 'CacheHit',  'Value': 1},  # HIT時
+        {'MetricName': 'CacheMiss', 'Value': 1},  # MISS時
+    ]
+)
+# ヒット率 = CacheHit / (CacheHit + CacheMiss) × 100
+# ヒット率低下 → 閾値・チャンキング戦略を見直す
+```
+
+---
+
+## コスト最適化パターン（Task 4.1）
+
+### Cost Explorer + タグ戦略（コスト配分追跡）
+
+どのビジネス機能がBedrockコストを消費しているかをタグで可視化する。
+
+```
+# Bedrock呼び出し時にタグを付与
+bedrock:feature = "summarization"
+bedrock:team    = "customer-support"
+bedrock:env     = "production"
+
+→ Cost Explorerでタグ別フィルタ
+→「要約機能が月$500、サポートが月$300」と把握
+→ コスト超過の機能を特定してモデルを見直す
+```
+
+### モデルフォールバックメカニズム
+
+カスケード（品質不足で上位モデルへ）とは異なり、**エラー・タイムアウト時に下位モデルへ切り替えてサービス継続**するのが主目的。
+
+```
+Fable 5 呼び出し
+  ├─ 成功 → そのまま返す
+  ├─ ThrottlingError / Timeout
+  │     → Sonnet にフォールバック（サービス継続）
+  └─ Sonnet も失敗 → Haiku にフォールバック（最低限の応答を保証）
+```
+
+可用性優先の設計。コスト削減は副次的効果。
+
+### 停止条件（暴走防止）
+
+GenAIプロセス（エージェントループ等）が無限実行してコストが膨らむのを防ぐ。
+
+| 実装場所 | 設定 |
+|---|---|
+| **Bedrockエージェント** | `maxSessionDuration`・最大オーケストレーションステップ数 |
+| **Step Functions** | `TimeoutSeconds`（ワークフロー全体）・`HeartbeatSeconds`（各State） |
+| **CloudWatch + Lambda** | InvocationCountが急増→アラーム→Lambdaで強制停止 |
+
+### CloudFormation + キャパシティプランニング
+
+インフラをコード化して環境（dev/stg/prod）間で一貫した構成を再現する。
+
+```yaml
+Resources:
+  BedrockProvisionedThroughput:
+    Type: AWS::Bedrock::ProvisionedModelThroughput
+    Properties:
+      ModelUnits: 5      # 予測トラフィックから算出
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      ReservedConcurrentExecutions: 100  # Bedrock過剰リクエスト防止
+```
+
+### Step Functions プロンプト最適化ワークフロー
+
+本番ではなく**チューニングフェーズで**複数プロンプト変種を自動テストする用途。
+
+```
+Step Functions ステートマシン（チューニング専用）：
+  ① 変種A/B/Cを並列でBedrock呼び出し
+  ② トークン数・品質スコアを集計（Lambda）
+  ③ コスト効率 = 品質 / トークン数 で最良変種を選定
+  ④ Parameter Storeに書き込む → 本番Lambdaはここから読む
+```
+
+---
+
+## 事前計算とキャッシュ戦略（Task 4.2）
+
+「予測可能なクエリ」を事前にFMで処理し、低レイテンシーストアに保存しておくパターン。
+
+```
+【事前計算フロー】
+EventBridge（夜間スケジュール）→ Lambda → Bedrock FM
+  → 結果をDynamoDB + ElastiCacheに保存
+
+【本番リクエスト】
+ユーザー → ElastiCache（HIT→即返却）
+           → DynamoDB（HIT→返却 + Redisに書き戻し）
+           → FM呼び出し（MISS時のみ）
+```
+
+### レイテンシー比較
+
+| サービス | レイテンシー | 特徴 |
+|---|---|---|
+| **DynamoDB + DAX** | **マイクロ秒** | DynamoDB専用インメモリキャッシュ。DynamoDB API互換 |
+| **ElastiCache（Redis）** | ミリ秒未満 | 汎用インメモリ。セマンティックキャッシュにも使える |
+| **DynamoDB単体** | 1桁ms | 永続KVストア |
+| **S3** | 数十ms | オブジェクトストレージ |
+
+**試験の判断軸：**
+- 「最小レイテンシー」+「DynamoDB」→ **DAX**（マイクロ秒）
+- 「汎用の超高速キャッシュ」→ **ElastiCache（Redis）**
+- RedshiftはDWH（分析用）≠ Redis（キャッシュ）：読み間違い注意
+
+---
+
+## オーケストレーション vs スケーリング（Task 4.2）
+
+```
+【オーケストレーション】= 指揮者（処理の流れ・順序・分岐を制御）
+Step Functions:
+  A → [B, C, D]（並列）→ E（マージ）
+  エラー時はFにフォールバック
+  → 「何を・どの順で・どう組み合わせるか」を管理
+
+【スケーリング】= 楽団員の人数調整（処理能力の増減）
+SQS + Lambda:
+  リクエスト増 → Lambdaを自動増加
+  → 「同じ処理をどれだけこなすか」を制御
+```
+
+**試験の判断軸：**
+- 「複雑なワークフロー」「並列＋マージ」「分岐・エラーハンドリング」→ **Step Functions**
+- 「大量リクエストの流量制御」「キューイング」「非同期処理」→ **SQS**
+
+---
