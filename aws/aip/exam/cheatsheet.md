@@ -101,6 +101,9 @@
 - 「ドメイン固有の脅威検出」（汎用ガードレールで不可）→ **SageMaker カスタム安全性分類器**
 - 画像の不適切判定 → **Rekognition DetectModerationLabels** / テキストPII → **Comprehend DetectPiiEntities**
 - Macie / GuardDuty はセキュリティ監視であってコンテンツモデレーションではない（引っかけ）
+- **S3のPII検出・コンプライアンスレポート** → **Macie**（継続的自動検出） + Comprehend（テキスト内PII API）+ EventBridge + Lambda（自動修復）
+- Macie の「機密データの自動検出」= 常時監視。週次・月次の検出ジョブより「自動修復・継続監視」要件に合う
+- 「S3にあるデータ = バッチでいい」は罠 → 要件に「自動修復」「継続的コンプライアンス」があれば Macie 自動検出が正解
 - Lambda+正規表現はルールベースで巧妙なプロンプトインジェクションを検出できない
 
 ## 多層防御・セキュリティ統合
@@ -113,6 +116,22 @@
 - 「脅威インテリジェンス統合」→ **EventBridge + Lambda** で外部フィードを定期取得し各レイヤーに反映
 - プロンプトインジェクション vs ジェイルブレイクの検出は多段（入力サニタイズ→Guardrails→出力検査）
 - 「Bedrock の包括的セキュリティ」→ **IAM + CloudTrail + CloudWatch**（CloudTrail が監査を担う）
+- **セキュリティ実装順序**（PII対応 GenAI）: **IAM（基盤）→ Comprehend（入力PII検出・マスク）→ Bedrock Guardrails（出力フィルタ）→ CloudWatch（ログ・監視）**
+- EventBridge = イベントルーティング → コンテンツフィルタリング防御層にはならない（多層防御問題での引っかけ）
+- EventBridge = イベント駆動アーキテクチャ用 → **継続的なメトリクス監視（信頼度スコア等）には不適**。監視は CloudWatch カスタムメトリクス
+- 「SQL インジェクション・セマンティクス上有害なクエリの検出」→ **Lambda + SQL AST 解析**（正規表現は複雑な構文を悪用した攻撃を検出できない）
+- 「専門ドメイン（SQL等）でハルシネーション防止・確定的出力」→ **フューショットプロンプティング**（ゼロショットは一貫性なし・ハルシネーション増）
+- SQS = キューイング・可用性 → コンテンツフィルタリング機能なし（多層防御問題での引っかけ）
+- WAF は AIコンテンツ（PII・有害コンテンツ）をフィルタリングできない → SQLi/XSS 等のWeb攻撃層のみ（引っかけ）
+
+## 評価・バイアス・データセット
+
+- **属性バイアス（性別・人種・職業・年齢）の評価** → **BOLD データセット** + Bedrock モデル評価ジョブ
+- RealToxicityPrompts = **有害性（Toxicity）専用** → 属性バイアス評価には使えない（引っかけ）
+- WikiText2 = 一般テキスト生成精度（Perplexity）評価用 / T-REx = 事実的知識評価用 → バイアス評価用ではない
+- SageMaker Clarify = 伝統的 ML のバイアス検出 → LLM のプロンプトバリアントテスト・セカンダリモデル検証には不向き
+- 「バイアスの継続的モニタリング＋アラート」→ **CloudWatch カスタムメトリクス**（デフォルト機能ではなくカスタム。バイアス数値を自前プッシュ）
+- 「制御されたプロンプトバリアントテスト」→ **Bedrock Prompt Management**
 
 ## 評価・モニタリング・オブザーバビリティ
 
@@ -121,7 +140,7 @@
 - CloudWatch Synthetics は外形監視（合成ユーザーの定期実行）。LLM出力の品質評価には使わない
 - 「基準値が自動更新」→ **CloudWatch 異常検出アラーム**（固定しきい値・Contributor Insights は自動更新不可）
 - 「どれが一番多いか可視化・ランキング」→ **Contributor Insights** /「複数条件が重なった時だけ警告」→ **複合アラーム**
-- 「会話内容を監査」→ **Model Invocation Logging**（CloudTrail はAPIメタデータのみでプロンプト内容なし）
+- 「会話内容を監査」「プロンプト履歴を記録」→ **モデル呼び出しのログ記録（Model Invocation Logging）**（CloudTrail はAPIメタデータのみでプロンプト内容なし）
 - 「エージェントの推論過程」→ **Agent トレース（enableTrace）** /「RAG回答のソース」→ **KB citations**
 - トラブルシュート3点：遅延箇所 → **X-Ray**（サブセグメント）/ ログ検索集計 → **Logs Insights** / AI固有パターンの知見 → **Q Developer**
 - 「ログとメトリクスを同時に・カスタムメトリクスを手軽に」→ **EMF** / EC2アプリのML自動ベースライン → **Application Insights**
