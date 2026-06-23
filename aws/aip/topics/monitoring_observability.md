@@ -108,7 +108,7 @@ Kubernetesの監視ではデファクトスタンダード。
 | EC2アプリのMLベース異常検出 + ログ相関 | CloudWatch **Application Insights** |
 | ログを書くだけでカスタムメトリクスも記録 | CloudWatch **EMF** |
 | ECS/EKSコンテナのメトリクス監視 | CloudWatch **Container Insights** |
-| Bedrockトークン数の動的異常検出 | CloudWatch **異常検出アラーム**（→ bedrock_guardrails_eval.md 参照） |
+| Bedrockトークン数の動的異常検出 | CloudWatch **異常検出アラーム**（→ bedrock_guardrails.md 参照） |
 | 可視化ダッシュボード（静的しきい値） | **Managed Grafana + Managed Prometheus** |
 | 大量ログの全文検索・リアルタイム分析 | **OpenSearch Service**（Firehose配信可） |
 

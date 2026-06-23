@@ -117,7 +117,7 @@ OpenSearch Serverless（ベクトル + メタデータ）
 
 ## セマンティックキャッシュ（AIP-17 再掲・参照）
 
-「表現は違うが同じ意図」の問い合わせを意味ベクトルで検出し、Bedrock呼び出しを削減するパターン。詳細は [bedrock_guardrails_eval.md](./bedrock_guardrails_eval.md) のセマンティックキャッシュセクション参照。
+「表現は違うが同じ意図」の問い合わせを意味ベクトルで検出し、Bedrock呼び出しを削減するパターン。詳細は [bedrock_guardrails.md](./bedrock_guardrails.md) のセマンティックキャッシュセクション参照。
 
 ### 要点
 

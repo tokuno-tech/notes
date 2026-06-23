@@ -207,9 +207,9 @@ Standard ワークフロー → 同期実行（呼び出し元がブロックさ
 
 **正しい判断軸**：「包括的コンプライアンス2択」= Model Cards（モデル文書化）+ Glue（データ追跡・メタデータ）をセットで選ぶ。
 
-## bedrock_guardrails_eval（mist）
+## bedrock_guardrails（mist）
 
-出典: topics/bedrock_guardrails_eval.md
+出典: topics/bedrock_guardrails.md
 
 ## AIP-21 正解構成まとめ
 
