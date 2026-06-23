@@ -681,6 +681,38 @@ Lambda 関数    → API Gateway  (同期)   ┐
 | 向き | AI処理チェーン・RAGパイプライン | 決定論的処理・外部サービス統合 |
 | 設計方法 | ビジュアルノード（ノーコード寄り） | JSONの状態定義（コード寄り） |
 | AI特化機能 | ✅ プロンプトノード・エージェントノード内蔵 | ❌ 別途Bedrock SDK呼び出しが必要 |
+| waitForTaskToken | ❌ 非対応 | ✅ 対応（人間承認フロー） |
+
+```
+Bedrock Flows が向くケース（Bedrock 内で完結）
+  FM呼び出し → 条件分岐 → KB検索 → FM呼び出し
+
+Step Functions が向くケース（外部をまたぐ）
+  FM呼び出し → DynamoDB書き込み → 人間承認待ち → 外部API呼び出し
+```
+
+### CoT（Chain-of-Thought）との組み合わせ
+
+各推論ステップをプロンプトノードとして定義し、ノードの順番がそのまま思考の順番になる。
+
+```
+[Input: 論文テキスト]
+  ↓ [Prompt ノード①: 「まず前提条件を整理してください」]
+  ↓ [Prompt ノード②: 「次に仮説を立ててください」]
+  ↓ [Prompt ノード③: 「証拠と照合して結論を出してください」]
+  ↓ [Output: 構造化された推論結果]
+```
+
+→「CoT テンプレート」「推論ステップを体系的に管理」が出たら **Bedrock Flows** が正解候補。
+
+### 試験での識別キーワード
+
+| キーワード | 正解 |
+|---|---|
+| 「コードなしで AI パイプライン」「ノードでつなぐ」「条件分岐を含む生成AI」 | **Bedrock Flows** |
+| 「CoT テンプレート」「推論ステップを順番に管理」 | **Bedrock Flows** |
+| 「自律的にツールを選んで実行」 | **Bedrock Agents** |
+| 「人間承認待ち・外部サービスをまたぐ」 | **Step Functions** |
 
 ---
 
@@ -775,69 +807,6 @@ def handler(payload):
 # - /invocations エンドポイント
 # - /ping エンドポイント（ヘルスチェック）
 ```
-
-## Bedrock プロンプトフロー（Prompt Flows）
-
-### 概要
-
-**Bedrock ネイティブのビジュアルワークフロービルダー。** 複数の FM 呼び出し・KB 検索・条件分岐をノードでつなぎ、コードなしで AI パイプラインを構築できる。
-
-```
-[Input] → [Promptノード①] → [Conditionノード] → [Promptノード②] → [Output]
-                                    ↓ No
-                              [KBノード] → [Promptノード③] → [Output]
-```
-
-### 使えるノード一覧
-
-| ノード | 役割 |
-|---|---|
-| Input / Output | フローの入口・出口 |
-| **Prompt** | FM を呼び出してテキスト生成 |
-| **Condition** | 条件分岐（if/else） |
-| Iterator / Collector | リストをループ処理・集約 |
-| **Knowledge Base** | RAG 検索 |
-| Agent | Bedrock Agent を呼び出す |
-| Lambda | カスタムロジックを実行 |
-| S3 Retrieval / Storage | S3 からデータ取得・保存 |
-
-### Step Functions との使い分け（重要）
-
-| | Prompt Flows | Step Functions |
-|---|---|---|
-| **所属** | Bedrock ネイティブ機能 | 独立した AWS サービス |
-| **対象** | Bedrock 内完結の AI パイプライン | 外部サービスをまたぐ汎用ワークフロー |
-| **FM 統合** | ノード1個でネイティブ呼び出し | 要カスタム実装 |
-| **コード** | 不要（GUI） | 要 ASL（JSON 定義） |
-| **waitForTaskToken** | 非対応 | 対応（人間承認フロー） |
-
-```
-Prompt Flows が向くケース（Bedrock 内で完結）
-  FM呼び出し → 条件分岐 → KB検索 → FM呼び出し
-
-Step Functions が向くケース（外部をまたぐ）
-  FM呼び出し → DynamoDB書き込み → 人間承認待ち → 外部API呼び出し
-```
-
-### CoT（Chain-of-Thought）との組み合わせ
-
-Prompt Flows は CoT 推論パターンの実装にも使える。
-
-```
-[Input: 論文テキスト]
-  ↓
-[Prompt ノード①: 「まず前提条件を整理してください」]
-  ↓
-[Prompt ノード②: 「次に仮説を立ててください」]
-  ↓
-[Prompt ノード③: 「証拠と照合して結論を出してください」]
-  ↓
-[Output: 構造化された推論結果]
-```
-
-- **CoT テンプレート**：各推論ステップをノードのプロンプトとして定義
-- **推論の順序管理**：ノードのつながりがそのまま思考の順番になる
-- **フィードバック統合**：条件ノードで「推論が不十分なら再試行」といったループも組める
 
 ## Bedrock Agent セッションメモリ（sessionId）
 

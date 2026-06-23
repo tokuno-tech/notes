@@ -9,6 +9,8 @@
 - **CloudWatch Synthetics** は外形監視（カナリア）であって、LLM 出力の品質評価ではない → 詳細: [topics/bedrock_guardrails.md](../topics/bedrock_guardrails.md)（AIP-79）
 - **Cognito** は「人間のユーザー向け認証」。サービス間（M2M）の API 認証は IAM ロール + SigV4 → 詳細: [mistakes.md](./mistakes.md)（AIP-25）
 - **SQS + KB 同期はリアルタイムではない**。リアルタイムデータはエージェントのアクショングループで API 直呼び → 詳細: [mistakes.md](./mistakes.md)（AIP-27）
+- **Knowledge Bases のクエリ分解は内蔵機能**。別途 Agent + 複数 FM を使わなくていい。「クエリ分解を有効にする」だけで OK → 詳細: [topics/bedrock_agents.md](../topics/bedrock_agents.md)（Q4）
+- **Bedrock Flows の正式名称は「Amazon Bedrock Flows」**。「Prompt Flows」「プロンプトフロー」は別名・旧称。試験では「Bedrockフロー」「Bedrock Flows」で出てくる → 詳細: [topics/bedrock_agents.md](../topics/bedrock_agents.md)（AIP-73）
 
 ---
 
