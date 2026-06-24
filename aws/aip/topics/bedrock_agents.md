@@ -577,7 +577,7 @@ Task / Choice / Parallel / Wait / Map などのステートを組み合わせて
 | **Memory & Session Management** | セッションIDベースで会話履歴・コンテキストをマネージドに永続保持 | セッション間の文脈維持 |
 | **AgentCore Identity** | IAM + OAuth 2.0 / SAML でセッション単位の認証・認可 | ユーザーごとの認証・認可 |
 | **Event Processing** | 同期（リアルタイム）と非同期（バックグラウンド）を両方ネイティブサポート | リアルタイム＋バックグラウンド処理 |
-| **Observability** | CloudWatch・X-Ray統合で推論ステップのトレース | モニタリング |
+| **Observability** | **AgentCore Observability**（専用の本番監視基盤）。CloudWatch・X-Ray統合で推論ステップを継続監視 ※`enableTrace`（Agents for Bedrock のデバッグ機能）とは別物 | 本番モニタリング |
 | **サーバーレス自動スケール** | キャパシティプランニング不要 | 運用負荷最小 |
 
 ### ツール登録アーキテクチャ

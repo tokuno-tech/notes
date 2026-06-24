@@ -476,6 +476,33 @@ S3生データ(Artifact) → 学習(Action) → モデルv1(Artifact)
 
 ---
 
+## SageMaker Data Wrangler（Task 4.3）
+
+**GUIベースのデータ準備・変換ツール。コードなしでデータのクリーニング・変換・品質検証ができる。**
+
+### Glue Data Quality との使い分け
+
+| | AWS Glue Data Quality | SageMaker Data Wrangler |
+|---|---|---|
+| **操作方法** | コード（DQDL言語） | **GUI（ノーコード）** |
+| **得意** | 大規模ETL・自動化・定期実行 | 探索的データ分析・視覚的な品質確認 |
+| **主な用途** | 本番パイプラインの品質ゲート | 初期データ調査・前処理フロー設計 |
+
+### ベクトルストア用データ準備での役割
+
+```
+S3（生データ）
+    ↓
+SageMaker Data Wrangler（GUI）
+    ├─ 欠損値・外れ値・分布の可視化
+    ├─ テキストクリーニング（特殊文字除去・正規化）
+    └─ 変換フローを .flow ファイルとして保存・再利用
+    ↓
+検証済みデータを S3 へ出力 → Bedrock Knowledge Base への取り込み
+```
+
+---
+
 ## SageMaker Clarify バイアス指標（Task 3.3）
 
 | 指標 | 略称 | 意味 | 値の解釈 |

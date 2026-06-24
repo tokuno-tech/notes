@@ -550,6 +550,19 @@ CloudWatch Synthetics が苦手なこと：
   本番ユーザーの多様なクエリに対するハルシネーションは検知不可
 ```
 
+### CloudWatch Events との混同
+
+```
+CloudWatch Events（= Amazon EventBridge の旧名）
+  ✅ AWSリソースの状態変化に反応してアクションを起こす
+     例）「EC2が停止したらLambdaを呼ぶ」
+  ❌ 異常検出機能はない
+  ❌ メトリクスのバーストパターン検知はできない
+
+異常検出が必要なら → CloudWatch 異常検出アラーム（MLベースのバンド）
+イベント駆動の自動化が必要なら → CloudWatch Events / EventBridge
+```
+
 ---
 
 ## 不正解パターン（AIP-21）
@@ -822,6 +835,28 @@ Lambda の最大実行時間 = 15分
 「DynamoDB + CloudFront でルーティング」
   → ❌ DynamoDBは毎回ネットワーク往復が発生。CloudFrontはパーソナライズされたレスポンスをキャッシュ不可
   　 バリデーション・段階的適用・自動ロールバックも持たない
+```
+
+---
+
+## enableTrace vs AgentCore Observability（Task 4.3）
+
+```
+「エージェントのトレース・デバッグ」が問われたとき、同じ「トレース」でも別物：
+
+enableTrace（Agents for Amazon Bedrock）
+  → InvokeAgent API のパラメータ
+  → レスポンスストリームにトレースが混在して返ってくる
+  → 開発・デバッグ用途。本番継続監視には不向き
+
+AgentCore Observability（Bedrock AgentCore）
+  → AgentCore 専用の独立したオブザーバビリティサービス
+  → CloudWatch・X-Ray に統合。ダッシュボードで継続監視可能
+  → 本番運用向け
+
+判断軸：
+  「開発中に推論の動きを確認」→ enableTrace
+  「本番環境で継続的に監視・アラート」→ AgentCore Observability
 ```
 
 ---
