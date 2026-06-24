@@ -860,3 +860,24 @@ AgentCore Observability（Bedrock AgentCore）
 ```
 
 ---
+
+## ユーザー別使用量追跡（Converse API + requestMetadata）（Domain 4 Practice Q4.3）
+
+```
+【A】Bedrockの組み込みメトリクスにカスタムディメンション追加 → ❌ 技術的に不可
+  （「数百万ディメンションで形骸化」より前の問題。そもそも追加できない）
+
+【B】X-Ray でユーザーIDごとにグループ化 → ❌ X-Ray は Converse API と統合されていない
+
+【E】システムプロンプトにユーザーIDを追加 → ❌ モデルの生成テキストに影響する可能性
+  （タグ付けのメタデータはトークン生成プロセスに干渉しない requestMetadata で渡す）
+
+正解パターン：
+  D: requestMetadata に userId を追加（ログにキーバリューで記録される）
+     ↓
+  C: Logs Insights で requestMetadata.userId を解析・集計
+```
+
+**判断軸：** ユーザー別追跡・コスト按分 → `requestMetadata` + `Logs Insights`（メトリクスやX-Rayは不可）
+
+---
