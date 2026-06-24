@@ -861,6 +861,23 @@ AgentCore Observability（Bedrock AgentCore）
 
 ---
 
+## モデル蒸留：生徒モデル正解 ＋ データ方式で落とす罠（Domain 4 Practice ボーナス）
+
+```
+C: Nova Lite（✅ 正しい生徒）＋ プロンプト+応答ペア（❌ 合成技術OFF）
+D: Nova Lite（✅ 正しい生徒）＋ プロンプトのみ（✅ 合成技術ON）
+```
+
+**識別キーワード：** 「Bedrockの独自のデータ合成技術を使用して」→ 即「プロンプトのみ」確定  
+**なぜペアだとNGか：** 既存応答をそのまま使うだけになり、Bedrockが多様なレスポンスを自動生成しなくなる
+
+**生徒モデルの罠：**
+- Nova Pro 教師 → Nova Premier は生徒に**なれない**（Premierの方が大きい）
+- Nova Premier 教師 → Nova Pro は生徒に**なれる**
+- サイズ順：Nova Premier > Nova Pro > Nova Lite > Nova Micro
+
+---
+
 ## ユーザー別使用量追跡（Converse API + requestMetadata）（Domain 4 Practice Q4.3）
 
 ```

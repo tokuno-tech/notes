@@ -28,6 +28,9 @@
 
 ## スループット・コスト最適化
 
+- 「コスト削減＋精度維持」→ **モデル蒸留**（大きな教師→小さな生徒へ知識転送）
+- 蒸留：「Bedrockの独自合成技術を使う」→ **プロンプトのみ**（応答ペアを渡すと合成技術OFF）
+- 蒸留の生徒モデル：Nova Pro教師 → **Nova Lite / Nova Micro**（Nova Premierは教師より大きいのでNG）
 - 「アイドル長め＋突発スパイク」→ **オンデマンド推論**（アイドル時コストゼロ）/「安定高トラフィック」→ **プロビジョンド**
 - 「コスト効率＝プロビジョンド」は罠 → 必ずトラフィック量を確認してから判断
 - テキスト系モデルのバッチ推論 → **CreateModelInvocationJob**。`StartAsyncInvoke` は **Nova Reel（動画生成）専用**
@@ -142,6 +145,7 @@
 - 「基準値が自動更新」→ **CloudWatch 異常検出アラーム**（固定しきい値・Contributor Insights は自動更新不可）
 - 「どれが一番多いか可視化・ランキング」→ **Contributor Insights** /「複数条件が重なった時だけ警告」→ **複合アラーム**
 - 「会話内容を監査」「プロンプト履歴を記録」→ **モデル呼び出しのログ記録（Model Invocation Logging）**（CloudTrail はAPIメタデータのみでプロンプト内容なし）
+- モデル呼び出しログの送信先：テキスト・リアルタイム分析 → **CloudWatch Logs** / 画像・動画・100KB超の大データ・バッチ分析 → **S3 + Athena**（CloudWatch Logsはバイナリ画像非対応）
 - 「エージェントの推論過程」→ **Agent トレース（enableTrace）** /「RAG回答のソース」→ **KB citations**
 - トラブルシュート3点：遅延箇所 → **X-Ray**（サブセグメント）/ ログ検索集計 → **Logs Insights** / AI固有パターンの知見 → **Q Developer**
 - 「ログとメトリクスを同時に・カスタムメトリクスを手軽に」→ **EMF** / EC2アプリのML自動ベースライン → **Application Insights**
