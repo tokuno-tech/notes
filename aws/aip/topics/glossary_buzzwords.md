@@ -471,3 +471,24 @@ Q: 「育児休業の申請期限は？」    → A（正解）: 「出産予定
 - AIP では「包括的な評価システム」の文脈で**敵対的テスト**として登場（出典 Domain 5 Task 5.1）
 - 対になる用語：**ブルーチーム**（守る側）。両者を統合した演習を**パープルチーム**と呼ぶこともある
 - 攻撃の種類（インジェクション/ジェイルブレイク）の詳細は [bedrock_guardrails.md](bedrock_guardrails.md)、評価手法としての位置づけは [model_evaluation.md](model_evaluation.md) 参照
+
+## SLI / SLO / SLA
+
+サービスの信頼性・品質目標に関する3層の指標体系。
+
+| 用語 | 正式名 | 意味 | 例 |
+|------|--------|------|-----|
+| **SLI** | Service Level Indicator | 実際に計測する指標 | p99 レイテンシー = 450ms |
+| **SLO** | Service Level Objective | チーム内で設定する目標値 | p99 < 500ms |
+| **SLA** | Service Level Agreement | 顧客との契約上の約束 | p99 < 1000ms（違反で違約金） |
+
+```
+SLI（計測） → SLO（目標）→ SLA（契約）
+          達成できなければ SLA 違反 → 顧客への補償が発生
+```
+
+- **SLO は SLA より厳しく設定**するのが原則（余裕を持たせてバッファにする）
+- **SLA は p99 で設定するのがベストプラクティス**（平均値は外れ値に騙される）
+- CloudWatch **Application Signals** = SLO を設定し SLI が違反しそうなときにアラートを出すサービス
+- AIP 試験では「SLA を守るためのアーキテクチャ」文脈（Provisioned Throughput・クロスリージョン推論等）で登場
+
