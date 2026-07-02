@@ -992,3 +992,17 @@ Step Functions スケジュール実行：
 - `AWS/Bedrock`・`AWS/SageMaker`・`AWS/Lambda` は AWS が予約済みの名前空間
 - カスタムメトリクスは **`AWS/` で始まらない**独自名前空間を使う（例：`MyApp/FairnessMetrics`）
 - 信頼度スコア・引用頻度・バイアス指標などは全てカスタム名前空間で `PutMetricData` で送る
+
+## IAM Identity Center + SAMLフェデレーション + OU/SCP（公式模試2週目）
+
+- 「既存のエンタープライズIdPと統合し、部署別RBAC、一元ガバナンス」→ **IAM Identity Center + SAMLフェデレーション**
+  - SAMLフェデレーション＝外部IdP（AD/Entra ID/Okta等）が署名付きアサーションでユーザーを保証 → AWSはIAMユーザーを作らず一時権限を付与。二重管理なし・退職はIdP側無効化で即失効＝最もセキュア
+  - 権限セットをOUごとに割当＝RBAC、監査＝CloudTrail
+- **OU** = AWS Organizations内でアカウントを束ねるフォルダ（部署単位）。入れ子可
+- **SCP** = OU/アカウントに適用する「禁止」の上限ガードレール（許可はしない、禁止のみ）。「組織全体で未承認モデル呼び出しを禁止」等
+- 補足：Cognitoの "user" は「ログインする人間」全般（顧客だけでなく評価者・社内ユーザー）。ただし組織のAWSリソース制御はIAM Identity Center側
+
+## AWS Config：既存リソースの構成コンプライアンス（公式模試2週目）
+
+- 「**既存の**S3バケット等が基準（例：SSE-KMS＋カスタマーマネージドキー）に準拠しているか検証し、非準拠を是正」→ **AWS Config カスタムルール（RDK）＋自動修復**
+- 混同注意：Macie=機密データの発見/分類（構成準拠チェックではない）／CloudTrail+Athenaで自作監査=overhead＆脆い／EventBridge+Step Functions=**新規PutObject時のゲート**で「既存リソースの検証」にならない
