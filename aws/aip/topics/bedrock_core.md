@@ -116,6 +116,21 @@ API Gateway WebSocket API：
   → 構成が複雑、運用負荷が増える
 ```
 
+### WebSocket + DynamoDB によるチャットアプリの基本パターン（AWS公式サンプル準拠）
+
+複数クライアントへのブロードキャストやセッション状態の保持が要件に含まれる場合は、上記の「複雑・運用負荷増」を許容してでもこの構成が正解になる（単発ストリーミングの Lambda Function URL では複数クライアント間のブロードキャストができないため）。
+
+Lambda が担う3つのルートの役割:
+
+| ルート | Lambdaがやること |
+|---|---|
+| `$connect` | 接続IDとユーザー名などのセッション情報を DynamoDB に書き込む |
+| カスタムルート（例: `sendmessage`） | DynamoDB から現在の接続一覧を取得 → 各接続IDに対して `API Gateway Management API` の `postToConnection` でメッセージを配信（ブロードキャスト） |
+| `$disconnect` | 対応する接続レコードを DynamoDB から削除（クリーンアップ） |
+
+- DynamoDBは「接続ID一覧を引くための索引」として機能する。API Gateway自体は接続IDを永続化しないため、複数接続への配信・再接続後の状態復元にはDynamoDB（またはそれに類する外部ストア）が必須
+- TTLを設定すれば、異常切断で `$disconnect` が呼ばれなかった古い接続レコードも自動的に掃除される
+
 ### Lambda Function URL が正解になる理由
 
 ```

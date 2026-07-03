@@ -760,6 +760,22 @@ Athena（クエリ実行）
 
 → **「規制コンプライアンスで呼び出し内容を保持」= 必ず Bedrock モデル呼び出しログ + S3**
 
+### CloudTrail：management event vs data event（Bedrock API別）
+
+| 区分 | 対象API | デフォルト記録 |
+|---|---|---|
+| **management event** | `InvokeModel` / `InvokeModelWithResponseStream` / `Converse` / `ConverseStream`、その他大半のBedrock制御系API | ✅ 追加設定不要で自動記録 |
+| **data event** | `InvokeAgent` / `InvokeInlineAgent` / `Retrieve` / `RetrieveAndGenerate` / `InvokeFlow` / `InvokeModelWithBidirectionalStream` 等 | ❌ advanced event selectorで明示的に有効化しないと記録されない（追加課金あり） |
+
+- `InvokeModel`系のログ本文は `requestParameters: {modelId: ...}` のみ。**プロンプト本文・レスポンス本文は含まれない**（`responseElements: null`）→ 上表の「APIメタデータのみ」の裏付け
+- 「エージェント呼び出し／KB検索／Flow実行の監査証跡が必要」という問題で「CloudTrailを有効にするだけ」は罠になりうる → **data eventの明示設定**が必要な場合がある
+
+### S3 サーバーアクセスログ記録
+
+- S3バケットへの**全リクエストの詳細ログ**（誰が・いつ・どのオブジェクトに・どんな操作をしたか）を別バケットに配信する機能
+- CloudTrail（API呼び出しの監査）や Bedrockモデル呼び出しログ（プロンプト内容）とは対象が異なる：**S3に保存済みのオブジェクト自体へのアクセス証跡**（読み取り・書き込みされたか）を残す
+- 「S3に保存したプロンプト/成果物データソースの監査可能な証跡」という要件が出たら、CloudWatchやモデル呼び出しログだけでは埋まらず**S3サーバーアクセスログ記録**が要る（バケットレベルのアクセス監査という別レイヤーのため）
+
 ### S3 Object Lock（コンプライアンスモード）
 
 ```
