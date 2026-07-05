@@ -276,6 +276,23 @@ IAM Identity Center
 Amazon Bedrock / AWS サービス
 ```
 
+### Active Directory（AD）とは
+
+Microsoft製の社内向けディレクトリサービス。社員・PC・部署グループなどの情報を一元管理し、社内ネットワークでの認証（ログイン）と認可（どのリソースにアクセスできるか）を担う。オンプレミス版が「Active Directory」、クラウド版が「Microsoft Entra ID（旧Azure AD）」。試験で「既存のIdPがEntra ID/Active Directory」と出たら、SAMLフェデレーションでAWSと連携するのが定石（AD FSがオンプレADのSAML変換役）。
+
+### AssumeRole（素の版）vs AssumeRoleWithSAML
+
+同じ「一時認証情報を発行するSTS API」でも、呼び出す前提が違う。ここを混同すると「IAMユーザー不要のはずが実は必要」という罠にはまる。
+
+| API | 呼び出す前に必要なもの | IAMユーザーは要る? |
+|---|---|---|
+| **AssumeRole**（素） | 呼び出し元が**既にIAMプリンシパル**（IAMユーザーまたは既存ロール）であること | ✅ 要る（長期クレデンシャルの管理が発生） |
+| **AssumeRoleWithSAML** | 外部IdPが発行した**SAMLアサーション** | ❌ 不要（IdP側の認証をそのまま信頼） |
+| AssumeRoleWithWebIdentity | OIDCトークン（Cognito/Google等） | ❌ 不要 |
+
+→「オンプレアプリからAssumeRole APIコールでクロスアカウントアクセス」という選択肢は、素のAssumeRoleを指す＝**呼び出し元アプリ自身がIAMユーザー/ロールの長期クレデンシャルを持つ必要がある**＝既存IdP（Entra ID等）を一切使わない構成。既存のSAML対応IdPがあるのにこれを選ぶと「IdP連携なし」「認証情報の二重管理」で不正解になりやすい。
+→ 素のAssumeRoleが妥当なのは「SAMLフェデレーションが使えない/組めない」場合の代替手段であり、既存IdPがSAML対応済みなら基本的に選ばない。
+
 ## PII マスキング + エンタープライズ検索パターン
 
 ### 正解の構成
@@ -386,24 +403,38 @@ Step FunctionsでのImplementation：
 
 ---
 
-## ID フェデレーション：IAM Identity Center vs Cognito
+## ID フェデレーション：IAM Identity Center vs 直接SAMLフェデレーション vs Cognito
 
 **IDフェデレーション：「既存の認証基盤のIDをAWSでも使い回す」**
 
-| | IAM Identity Center | Amazon Cognito |
-|---|---|---|
-| 主な対象 | **社員**（内部ユーザー） | **アプリのエンドユーザー**（外部） |
-| 典型例 | 社員がAWSコンソールにログイン | アプリの会員登録・ログイン |
-| AD連携 | ネイティブに得意 | できるが設定が複雑 |
-| スケール | 数百〜数千人 | 数百万人対応 |
+| | IAM Identity Center | 直接SAMLフェデレーション（IAMのSAMLプロバイダー） | Amazon Cognito |
+|---|---|---|---|
+| 主な対象 | **社員**（ワークフォース） | **社員**（ワークフォース） | **アプリのエンドユーザー**（顧客・CIAM） |
+| 典型例 | 社員がAWSコンソール/複数アカウントにログイン | 社員が個別アカウントにSAMLでログイン | アプリの会員登録・ログイン |
+| マルチアカウント一元管理 | ✅ 許可セットを組織全体に一括配布 | ❌ アカウントごとに個別設定が必要 | ❌ Identity Poolは1アカウント単位 |
+| AD/Entra ID連携 | ネイティブ・一元的 | 可能（アカウントごとに設定） | 可能だが本来用途外・設定が複雑 |
+| 運用オーバーヘッド | 最小（AWS公式ベストプラクティスが名指しで推奨） | アカウント数に比例して増加 | 目的外使用のため増加 |
+| スケール | 数百〜数千人（組織のワークフォース） | 同左 | 数百万人（消費者向け） |
 
 ```
 社内Active Directory（AD）
     ↓ フェデレーション
-IAM Identity Center
-    ↓
+IAM Identity Center（複数アカウントを横断するSSOハブ）
+    ↓ 許可セット（Permission Set）
 Bedrock / S3等にアクセス（社員が社内IDでそのままAWSにアクセス）
 ```
+
+IAM公式ベストプラクティス："For centralized access management, we recommend that you use AWS IAM Identity Center to manage access to your accounts and permissions within those accounts."（人間ユーザーの集中アクセス管理にはIAM Identity Centerを推奨）
+
+### SAML federationとSCIM provisioningは別物（重要）
+
+外部IdP（Okta、Entra ID等）とIAM Identity Centerを連携する際、**SAMLだけではユーザー・グループの情報は得られない**。
+
+- **SAML**：認証（サインイン）のプロトコル。「このユーザーは本人である」を証明するだけで、IdP側のユーザー・グループ一覧をIAM Identity Centerが**問い合わせる手段を持たない**
+- **SCIM（System for Cross-Domain Identity Management）**：ユーザー・グループの情報をIdPからIAM Identity Centerに**プロビジョニング（同期）**するプロトコル。手動プロビジョニングでも代替可能
+- 外部IdP統合では**SAML（認証）＋SCIM（ユーザー・グループ同期）の両方**を設定するのが標準構成。SCIM（または手動プロビジョニング）でIAM Identity Center側にユーザー・グループを事前に登録しておかないと、AWSアカウントやアプリケーションへの権限割り当てができない
+
+AWS公式ドキュメントの明言："The SAML protocol does not provide a way to query the IdP to learn about users and groups. Therefore, you must make IAM Identity Center aware of those users and groups by provisioning them into IAM Identity Center."
 
 ---
 
@@ -1018,7 +1049,30 @@ Step Functions スケジュール実行：
 - **SCP** = OU/アカウントに適用する「禁止」の上限ガードレール（許可はしない、禁止のみ）。「組織全体で未承認モデル呼び出しを禁止」等
 - 補足：Cognitoの "user" は「ログインする人間」全般（顧客だけでなく評価者・社内ユーザー）。ただし組織のAWSリソース制御はIAM Identity Center側
 
+## ⚠️ 弱点：IAM Identity Center設定 と SAMLフェデレーション設定は「競合する2択」ではない（航空会社CMMS問題・2択で正解）
+
+- 問題：Entra ID既存IdP＋複数AWSアカウント＋職務ベースでBedrockアクセスを一元制御したい（2つ選択）
+- **正解の組み合わせ = A + D**（一見別々の設定に見えて、実は1本のパイプラインの前半・後半）
+  - **A**：「IAM Identity CenterをEntra ID外部IdPとして設定＋カスタム許可セット」＝**接続の確立**（Identity CenterというSSOハブを作る）
+  - **D**：「Entra ID⇔IAM間にSAMLフェデレーションを設定＋Entra IDグループにマッピングしたIAMロール作成」＝**認可の紐付け**（渡ってきたグループ情報をロールにマッピングする）
+  - A単独＝繋がってはいるが「誰がどこまでアクセスできるか」の職務ベース制御が未定義。D単独＝マッピング方式はあってもSSOハブ（Identity Center）がなく複数アカウント一元管理にならない
+- **誤答のIAMロール+AssumeRole**が悪い理由：素のAssumeRole＝呼び出し元アプリ自身がIAMユーザー/ロールの長期クレデンシャルを持つ必要がある＝Entra ID連携を一切使わない構成（[SAML フェデレーション](#saml-フェデレーション)のAssumeRole vs AssumeRoleWithSAML表を参照）
+- **判断ルール**：「一元アクセス制御」＋「既存IdP統合」の2要件が出たら、①SSOハブ設定（IAM Identity Center外部IdP接続）②グループ→ロールのマッピング設定、の**両方が必要ステップ**として2択に分かれて出題されることがある。片方だけで「もう要件は満たした」と早合点しない
+
 ## AWS Config：既存リソースの構成コンプライアンス（公式模試2週目）
 
 - 「**既存の**S3バケット等が基準（例：SSE-KMS＋カスタマーマネージドキー）に準拠しているか検証し、非準拠を是正」→ **AWS Config カスタムルール（RDK）＋自動修復**
 - 混同注意：Macie=機密データの発見/分類（構成準拠チェックではない）／CloudTrail+Athenaで自作監査=overhead＆脆い／EventBridge+Step Functions=**新規PutObject時のゲート**で「既存リソースの検証」にならない
+
+## S3 ライフサイクルポリシー：Transition と Expiration（公式模試2週目）
+
+S3ライフサイクルルールのアクションは2種類あり、混同すると保持要件の判定を誤る。
+
+| アクション | 内容 | データ保持要件への効果 |
+|---|---|---|
+| **Transition**（移行） | 一定期間後に安価なストレージクラス（Standard-IA/Glacier等）へ移動。**データ自体は削除されない** | 「保持期限を超えても残り続ける」ため、単独では保持ポリシー違反になりうる |
+| **Expiration**（期限切れ） | 一定期間後にオブジェクトを**自動削除** | 「必要以上に長く保持しない」を機械的に強制する |
+
+→ 「保持期限の強制」「必要以上に保持しない」という要件には**Expiration**アクションが対応する。「アーカイブストレージへの移行」だけの選択肢はTransitionに過ぎず、削除を保証しない（罠）。
+
+**ライフサイクルルールはバケットポリシーより優先される**：公式ドキュメント曰く「バケットポリシーでライフサイクルルールによる削除・移行を阻止することはできない」。全プリンシパルを拒否するバケットポリシーがあっても、ライフサイクルの削除は通常通り実行される。この特性により「保持ポリシーを確実に強制する」手段としてライフサイクルポリシーが選ばれる。

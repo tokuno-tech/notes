@@ -10,3 +10,5 @@
 | Intervene / Intervened | 介入する / 介入した（過去形） | ガードレールが処理に割って入ってブロックする動作（`InvocationsIntervened`メトリクス） |
 | Forensic | 法廷の・科学捜査の | 「事後に証拠を収集し何が起きたか証明する」の意でIT監査文脈に転用（CloudTrail等） |
 | Modality | 様式・形態・様相 | 元は感覚生理学(sensory modality)・医学(treatment modality)の用語。AI/MLが「データの種類・形式」(テキスト/画像/音声/動画)に転用 |
+| Sanitize / Sanitization | 無害化する・浄化する / 無害化 | 入力データから危険な文字列・コードを除去/エスケープすること。WordPressのエスケープ処理と同じ概念。API Gatewayでは`$util.escapeJavaScript()`によるサニタイズ推奨（マッピングテンプレート文脈） |
+| SCIM（System for Cross-Domain Identity Management） | クロスドメイン向けID管理システム（略語） | 外部IdP（Okta・Entra ID等）のユーザー・グループ情報をIAM Identity Centerのような別サービスに**プロビジョニング（自動同期）**するための標準プロトコル。SAML（認証のみ・グループ情報は運ばない）とセットで使われる |

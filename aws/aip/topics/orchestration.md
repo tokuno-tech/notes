@@ -425,6 +425,25 @@ SQS メッセージ（JSONイベント）
 
 → 処理時間が 1〜2 分のドキュメント処理に API Gateway 経由の同期呼び出しは使えない。
 
+### S3署名付きURL vs PutObject 直接呼び出し（AIP-32）
+
+| アップロード方式 | クライアント側に必要なIAM権限 | 最小権限原則 |
+|---|---|---|
+| **署名付きURL**（Presigned URL） | 不要（一時的なURLトークンのみで期限付きアップロード） | ✅ 満たす |
+| **PutObject を直接呼ぶ** | クライアント/アプリに S3書き込みのIAM権限を直接付与する必要がある | ❌ 反する（クライアントに恒久的な書き込み権限を持たせることになる） |
+
+### S3イベント通知が直接呼び出せないターゲット（AIP-32）
+
+S3イベント通知は Lambda / SQS / SNS / EventBridge が直接ターゲットになれるが、**Step Functions ステートマシンや Bedrock Data Automation ブループリントを直接呼び出すことはできない**。
+
+```
+❌ S3イベント通知 → Step Functions（直接不可）
+✅ S3イベント通知 → EventBridge → Step Functions（EventBridgeルール経由でオーケストレーション開始）
+✅ S3イベント通知 → Lambda → Step Functions（Lambdaを仲介にすれば可能だが、Lambda分の運用負荷が発生）
+```
+
+→ **EventBridge + Step Functions（AWSサービスAPIを直接呼び出すSDK Integration）**の組み合わせは、仲介Lambda関数を作らずにオーケストレーションできるため、運用オーバーヘッド最小化の文脈で強い候補になる。
+
 ### 疎結合エージェント：Strands + MCP
 
 「動的ツール選択」「疎結合」が要件の場合、Strands + MCP パターンが正解。
