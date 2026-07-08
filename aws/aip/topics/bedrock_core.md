@@ -803,3 +803,25 @@ Safetensorsは**Hugging Faceが作った重み保存形式そのものの名前*
 - **アクティベーション前のレビュー・承認** → **バージョニング＋レビューワークフロー**（「保存ごとに自動で新バージョン有効化」は承認前レビューに反するので✗）
 - スタイル制約の強制（絵文字/カジュアル表現の制限）→ **Bedrockガードレール**（ワード/コンテンツフィルター）
 - 使用状況・テンプレート変更の**監査** → **CloudTrail**（誰が何を操作/変更したかの証跡）
+
+## Bedrock サービスエンドポイント 4種（コントロールプレーン / データプレーン）
+
+AWS API は通常「管理系（Control Plane）」と「実行系（Data Plane / Runtime）」で分離される。頻度・レイテンシ要件が桁違いに違うため別サービスとしてスケール・障害分離される。
+
+| エンドポイント名 | プレーン | 用途 |
+|---|---|---|
+| `com.amazonaws.<region>.bedrock` | Control | Bedrock本体の管理系（モデル一覧 `ListFoundationModels` / モデル情報 `GetFoundationModel` / モデルアクセス設定 / ログ設定 `PutModelInvocationLoggingConfiguration` / カスタムモデル管理） |
+| `com.amazonaws.<region>.bedrock-runtime` | Data | **モデル呼び出し**（`InvokeModel` / `InvokeModelWithResponseStream` / `Converse`）← アプリが実行時に叩く |
+| `com.amazonaws.<region>.bedrock-agent` | Control | Agent / Knowledge Base の**構築系**（Agent作成・更新、KB作成、データソース同期 `StartIngestionJob` 等） |
+| `com.amazonaws.<region>.bedrock-agent-runtime` | Data | Agent / KB の**実行系**（`InvokeAgent` / `Retrieve` / `RetrieveAndGenerate` = RAG検索と回答生成） |
+
+### 選び方（試験）
+- 「アプリが Bedrock でモデル推論」 → **bedrock-runtime**
+- 「Agent との対話 / KB を使った RAG」 → **bedrock-agent-runtime**
+- 「モデル一覧を取りたい / ログ設定 / KB を作りたい」 → 無印の **bedrock** / **bedrock-agent**（管理系）
+- 命名規則: **`-runtime` = 実行時にアプリが叩く**、無印 = 管理・構築系
+
+### Lambda 用インターフェースVPCエンドポイントとの向きの違い（罠）
+- `com.amazonaws.<region>.lambda` インターフェースエンドポイントは「**VPC内から Lambda を呼び出すため**」のもの（`lambda:Invoke` の入口）
+- 「Lambda関数 → 他サービス」の Outbound 経路には無関係。VPC内 Lambda から Bedrock を呼ぶには **bedrock-runtime** のエンドポイントが必要
+- プロキシ Lambda を挟んでも同じ問題（プロキシ側にも Bedrock 用エンドポイント or NAT が必要）

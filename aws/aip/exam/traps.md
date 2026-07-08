@@ -11,6 +11,8 @@
 - **SQS + KB 同期はリアルタイムではない**。リアルタイムデータはエージェントのアクショングループで API 直呼び → 詳細: [mistakes.md](./mistakes.md)（AIP-27）
 - **Knowledge Bases のクエリ分解は内蔵機能**。別途 Agent + 複数 FM を使わなくていい。「クエリ分解を有効にする」だけで OK → 詳細: [topics/bedrock_agents.md](../topics/bedrock_agents.md)（Q4）
 - **Bedrock Flows の正式名称は「Amazon Bedrock Flows」**。「Prompt Flows」「プロンプトフロー」は別名・旧称。試験では「Bedrockフロー」「Bedrock Flows」で出てくる → 詳細: [topics/bedrock_agents.md](../topics/bedrock_agents.md)（AIP-73）
+- **Lambda 用 Interface VPC Endpoint は「Lambdaを呼ぶ側」の入口**（`lambda:Invoke` inbound）であって、「Lambdaが他サービスを呼ぶための出口」ではない。VPC内Lambda→Bedrockを private に呼ぶには **bedrock-runtime** エンドポイントが必要。「プロキシLambdaを挟む」も同じ問題を移すだけで解決しない → 詳細: [topics/bedrock_core.md](../topics/bedrock_core.md)（Bedrockサービスエンドポイント4種）
+- **Client VPN / Site-to-Site VPN / Direct Connect は AWSサービス（Bedrock等）への private access 用途では正解にならない**。Client VPN＝リモートユーザ→VPC、Site-to-Site VPN＝拠点→VPC、DX＝専用線オンプレ→AWS、いずれも「AWSサービスAPIへの private path」を作る仕組みではない。正解は **PrivateLink（Interface VPC Endpoint）** → 詳細: [topics/bedrock_core.md](../topics/bedrock_core.md)
 
 ---
 
