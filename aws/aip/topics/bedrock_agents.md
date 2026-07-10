@@ -613,6 +613,13 @@ Task / Choice / Parallel / Wait / Map などのステートを組み合わせて
 |---|---|---|
 | **Memory & Session Management** | セッションIDベースで会話履歴・コンテキストをマネージドに永続保持 | セッション間の文脈維持 |
 | **AgentCore Identity** | IAM + OAuth 2.0 / SAML でセッション単位の認証・認可 | ユーザーごとの認証・認可 |
+
+**AgentCore Identityの詳細（インバウンド外部IdP連携）**：AgentCore Gateway/RuntimeへのアクセスにMicrosoft Entra ID・Google等の外部IdPをOIDCプロバイダーとして直接設定できる、**組み込みの機能**（公式ドキュメント`identity-idp-microsoft.html`で確認）。
+
+- 必要な設定はたった2つ：①**ディスカバリーURL**（IdPのOIDCメタデータエンドポイント。Microsoft Entra IDなら`https://login.microsoftonline.com/{tenantId}/v2.0/.well-known/openid-configuration`）②**許可するオーディエンス(`aud`クレーム)**＝IdP側に登録したアプリケーションID
+- これだけで追加のインフラ（Cognitoユーザープール、API Gateway+カスタムLambdaオーソライザー、IAM Identity Center等）が一切不要——AgentCore Identityが直接IdPのメタデータを取得してトークン検証まで完結する
+- **インバウンド**（ユーザー→エージェントへのアクセス認証、外部IdPをOIDCプロバイダーとして設定）と**アウトバウンド**（エージェント→外部リソースへのアクセス、資格情報プロバイダーとしてクライアントID/シークレットを登録しコールバックURLを設定）の2方向がある。今回のような「企業IdPでユーザーを認証してエージェントにアクセスさせる」はインバウンド側の設定
+- 判断軸：「AgentCore Runtime/Gatewayを外部企業IdP(Entra ID等)のOIDCで認証・運用負荷最小」→ **AgentCore Identityをインバウンドプロバイダーとして直接設定**が正解。Cognito経由・IAM Identity Center経由・カスタムLambdaオーソライザーはいずれも別途インフラ構築が必要で運用負荷増（罠）
 | **Event Processing** | 同期（リアルタイム）と非同期（バックグラウンド）を両方ネイティブサポート | リアルタイム＋バックグラウンド処理 |
 | **Observability** | **AgentCore Observability**（専用の本番監視基盤）。CloudWatch・X-Ray統合で推論ステップを継続監視 ※`enableTrace`（Agents for Bedrock のデバッグ機能）とは別物 | 本番モニタリング |
 | **サーバーレス自動スケール** | キャパシティプランニング不要 | 運用負荷最小 |

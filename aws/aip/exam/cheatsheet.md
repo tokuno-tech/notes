@@ -106,6 +106,7 @@
 - Agents 構築：マネージドで素早く → **Bedrock Agents** / コードで細かく・マルチプロバイダ → **Strands** / 専門エージェント振り分け → **Agent Squad**
 - AgentCore：既存Pythonをデプロイ・インフラ最小 → **Runtime** / HTTPサーバ自動管理 → **SDK(@app.entrypoint)** / コンテナ化自動 → **スターターツールキット**
 - レガシーAPI統合＋「複数エージェントで再利用」「運用負荷最小」→ **MCPサーバー（関数呼び出しスキーマ）＋AgentCore**／REST変換・プロキシ層は見た目の標準化のみで関数呼び出しの抽象化・再利用機構がなく不正解／エージェントごとのサイドカーミドルウェアは重複デプロイでスケールせず不正解
+- 「AgentCore Runtime/Gatewayを企業IdP(Entra ID等)のOIDCで認証・運用負荷最小」→ **AgentCore Identityをインバウンドプロバイダーとして直接設定**（ディスカバリーURL＋許可オーディエンス(aud)の2項目だけで完結）。Cognitoユーザープール経由・IAM Identity Center経由・API Gateway+カスタムLambdaオーソライザーはいずれも別インフラ構築が必要で運用負荷増（罠） → [bedrock_agents.md](../topics/bedrock_agents.md)
 - マルチターン文脈維持：エージェントなら **sessionId**（追加実装不要）/ 自前FM呼び出しなら messages[]自己管理 or DynamoDB
 - Step Functions **Standard vs Express**：人間の応答待ち・承認・数時間処理・監査証跡・重複不可 → **Standard** / 高頻度・短時間・低コスト → **Express**（5分制限。処理内容から常識判断、問題文に明記なくてもよい）
 - 「S3+Lambda+Step Functions Standard(Bedrockオーケストレーション)+DynamoDB」型の構成では、**監査証跡＝Standardの実行履歴(最長1年保持)が担当**、**DynamoDB＝処理ステータス/結果への高速アクセスが担当**（役割が違う。「DynamoDBに書いてあるから監査証跡」と混同しない）
@@ -224,6 +225,8 @@
 - 「クロスアカウントで検索アクセスを委譲」→ Q Business **Data Accessor ロール**
 - Q Business の RBAC＋運用負荷最小：**データソースのセキュリティグループマッピング**（既存エンタープライズロールを自動反映、組み込み機能）が正解。「セキュリティグループに基づくデータソース**フィルター**を作成する」は粒度不足＋カスタム構築＝不正解筋。CloudWatchアラーム自作も同様に不正解（Q Businessは監視機能を組み込み済み）
 - 「マルチモーダル文書の構造化を自前パイプラインなしで」→ **Bedrock Data Automation**（ブループリント+信頼度）
+- **BDAは1プロジェクト内の複数ブループリントからは自動選択できるが、複数プロジェクトをまたいだ自動選択はできない**（`InvokeDataAutomationAsync`はプロジェクトを明示指定する必要がある）。「請求書タイプごとに別プロジェクトを作りBDAに最適プロジェクトを判定させる」は不成立、正解は**1プロジェクトに複数ブループリントをまとめて登録**。文書タイプ分類に**Rekognition Custom Labels**を持ち出す選択肢も罠（顔分析/文字検出/コンテンツ検出用には非設計、BDA標準機能と機能重複で運用増）。**Textract AnalyzeDocument Queries**は自然言語の質問で該当箇所を抽出できるがBDAのような分類〜抽出の一括自動化ではない → [ai_services.md](../topics/ai_services.md)
+- **Bedrockナレッジベースはオーディオ/ビデオをネイティブサポートしない**（S3経由でサポートするのはドキュメント＋画像JPEG/PNGまで）。「決算発表のA/V録音を含む大量非構造化データをRAG化・運用負荷最小」→ **BDAをパーサーとして指定しKBに組み込む**が正解。Textract+Transcribeの個別処理やClaudeへの構造化プロンプトでのマルチモーダル処理は複数サービス調整/プロンプトメンテで運用負荷増（罠）→ [ai_services.md](../topics/ai_services.md)
 - 「画像・動画を直接分析・カスタムモデル不要」→ **Bedrock マルチモーダルFM** / 可視化 → **QuickSight**（QuickSight Q は画像分析不可）
 
 ## 開発ツール・フロントエンド・統合パターン
@@ -351,6 +354,8 @@
 - メタデータ＝本文以外の識別子・属性・時刻すべて（**IDもtimestampもメタデータ**、タグに限らない）。DynamoDBは本文をペイロード、メタデータをキー(PK/SK/GSI)にして引く
 - 外部/ファインチューニング済みモデル（HF・Safetensors・Llama）をBedrockで使う → **Bedrock Custom Model Import**（S3から、形式変換不要）。**保証された/特定レベルのスループット→プロビジョンドスループット**（オンデマンドは保証なし）
 - 組織のエンタープライズIdP連携＋部署別RBAC → **IAM Identity Center + SAML/SCIMフェデレーション**。組織全体で禁止アクションのガードレール → **SCP**。OU=アカウントを束ねるフォルダ
+- **1つのガードレール(1バージョン)は1つの固定ポリシー設定のみ**（部門/時間帯ごとの複数バリエーションは持てない）。「状況ごとに異なるルール＋運用負荷最小」→ **ガードレールにリソースタグを付与＋Lambdaがタグで選択**（DynamoDB等の別テーブルで選択ロジックを持つのは追加インフラで運用増、罠）。時刻ベースの自動切り替えは**EventBridgeスケジュールルールでLambda定期起動**が定番、`CreateGuardrail`/`UpdateGuardrail`をリクエスト都度呼ぶのはレイテンシー・競合リスクで不正解 → [bedrock_guardrails.md](../topics/bedrock_guardrails.md)
+- **Bedrockガードレールにアクセス制御(RBAC)機能はない**（Content/Denied topics/Word/Sensitive info/Contextual grounding/Automated Reasoningの6フィルターのみ）。「ガードレールでRBACを強制する」という選択肢は即不正解。プロンプトテンプレートへのロール別アクセス＋承認ワークフロー＋バージョニング＋監査証跡が必要な問題は**Prompt Management＋ガードレール(安全性)＋CloudTrail/CloudWatch Logs(監査)**の役割分担で組む → [bedrock_guardrails.md](../topics/bedrock_guardrails.md)
 - 「本番アカウントからBedrockへのインターネット非経由を**IAMロール設定/アプリの挙動に関係なく**強制」→ **OUにアタッチしたSCP**（承認済みVPCエンドポイント経由以外を拒否）が正解。**エンドポイントポリシー**はそのエンドポイント経由の通信の中身しか絞れず、パブリックエンドポイントへの迂回自体は防げない（罠）。**IAMロールのポリシー**はアカウント管理者が変更できてしまい組織全体を強制できない（罠）。「〇〇に関係なく強制」＝アカウント管理者の裁量を排除→SCPを最優先 → [security_governance.md](../topics/security_governance.md)
 - 既存リソースの構成が基準に準拠しているか検証＋自動是正 → **AWS Config（カスタムルールはRDK）**。Macie=機密データ発見、CloudTrail+Athena自作=overhead、EventBridge+SFn=新規イベントのゲート（既存検証にならない）
 - **監査証跡（誰が何を変更/操作したか）＝CloudTrail**。CloudWatch監視を"保護"の代わりに出す選択肢は罠（CloudWatch=性能/異常監視）
