@@ -111,15 +111,7 @@ Q6の構成パターン（リアルタイムストリーミング）：
 
 ---
 
-## Bedrock 全体の機能（Agents以外でも使える）
-
-### Model invocation logging
-
-- Agents に限らず、FMを呼び出す際のログを全般的に取れる機能
-- CloudWatch Logs や S3 に全モデル呼び出しの入出力を保存可能
-- コンプライアンス要件への対応に使う
-
----
+モデル呼び出しログは Agents 固有機能ではないため、詳細は [monitoring_observability.md](./monitoring_observability.md) の Model Invocation Logging に集約。
 
 ## ナレッジベース
 
@@ -359,37 +351,18 @@ Lambda 関数（MCP サーバーのロジック）
 | 観点 | Lambda Function URL | API Gateway |
 |---|---|---|
 | 管理コンポーネント数 | **少ない**（Lambda だけ） | 多い（API Gateway + Lambda） |
-| レスポンスストリーミング | **対応**（RESPONSE_STREAM モード） | REST API は対応・HTTP API は非対応（後述） |
+| レスポンスストリーミング | **対応**（RESPONSE_STREAM モード） | 対応可否・制約は API 種別と統合方式に依存 |
 | 認証 | AWS_IAM または NONE | Lambda オーソライザー / Cognito / IAM |
 | 用途 | 単純な HTTP エンドポイント・MCPサーバー | 高度なルーティング・複数Lambda統合・スロットリング |
 
-### API Gateway とストリーミング
+### ストリーミングの置き場
 
-| API Gateway オプション | ストリーミング | 備考 |
-|---|---|---|
-| **REST API** | ✅ **対応** | `InvokeWithResponseStreaming` で Lambda からストリーミング可能。タイムアウト最大 15 分 |
-| **HTTP API** | ❌ 非対応 | Lambda Response Streaming に非対応。全レスポンスをバッファリングしてから返す |
-| **WebSocket API** | ⚠️ **別プロトコル** | HTTP ストリーミングではない（後述） |
+Lambda / API Gateway / WebSocket のストリーミング比較は [bedrock_core.md](./bedrock_core.md) に集約。ここでは MCP サーバー公開の文脈として、**最小構成なら Lambda Function URL + RESPONSE_STREAM + AWS_IAM** と覚える。
 
-#### REST API のストリーミングの仕組み
-
-Lambda ハンドラーが以下の順でレスポンスを返す：
+### WebSocket API は「別プロトコル」
 
 ```
-① JSON レスポンスメタデータ
-② 8 バイトの null 区切り文字
-③ レスポンスペイロード（ストリーミング）
-```
-
-**制約**：
-- 最初の 10 MB は帯域無制限。10 MB 超は 2 MB/秒に制限
-- アイドルタイムアウト：リージョナル/プライベート = 5 分、エッジ最適化 = 30 秒
-- VTL によるレスポンス変換・キャッシングは非対応
-
-#### WebSocket API は「別プロトコル」
-
-```
-【HTTP ストリーミング（Lambda Function URL / API Gateway REST API）】
+【HTTP ストリーミング（Lambda Function URL など）】
   HTTP(S) プロトコルのまま chunked transfer encoding でレスポンスを逐次返す
   → MCP の「ストリーマブル HTTP トランスポート」要件を満たす
 
@@ -401,9 +374,9 @@ Lambda ハンドラーが以下の順でレスポンスを返す：
 
 WebSocket は「リアルタイム双方向通信」（チャット UI のトークン逐次表示など）には有効だが、MCP の「HTTP 上でのストリーミング」要件には対応できない。
 
-#### AIP-25 で Lambda Function URL が正解な理由（REST API が使えても）
+### AIP-25 で Lambda Function URL が正解な理由
 
-API Gateway REST API でもストリーミング自体は実現できる。それでも Lambda Function URL が正解なのは：
+API Gateway を使えるケースでも Lambda Function URL が正解になりやすい理由：
 
 - **管理コンポーネントの最小化**：API Gateway を追加すると設定・監視・バージョン管理のオーバーヘッドが増える
 - **Lambda Function URL はゼロ追加コスト**：Lambda の組み込み機能。追加サービス不要
@@ -692,71 +665,17 @@ Lambda 関数    → API Gateway  (同期)   ┐
 
 ## Amazon Bedrock Flows（Bedrockフロー）（AIP-73）
 
-**ビジュアルなノードベースのワークフロービルダー。** コードを書かずに「入力→処理→出力」の流れをグラフィカルに設計できる。
+Flows は Agents 固有機能ではなく、Step Functions / Agents との使い分けが重要なオーケストレーション領域。詳細は [orchestration.md](./orchestration.md) に集約。
 
-### フロー全体のイメージ
+ここでは Agents との境界だけ覚える。
 
-```
-入力ノード（ユーザー入力受け取り）
-  ↓
-プロンプトノード（プロンプト管理テンプレート + ガードレールを適用してFM呼び出し）
-  ↓
-条件ノード（値や内容で分岐）
-  ↓
-出力ノード（ユーザーへ返却）
-```
-
-### ノードの種類
-
-| ノード | 役割 |
+| 要件 | 主な候補 |
 |---|---|
-| **入力ノード** | フロー全体の入口。ユーザーの入力を受け取る |
-| **出力ノード** | フロー全体の出口。結果を返す |
-| **プロンプトノード** | プロンプト管理のテンプレートを指定してFMを呼び出す。**ガードレールも同ノードに関連付け可** |
-| **条件ノード** | 値や条件によって次ノードへの分岐を制御 |
-| **エージェントノード** | Bedrock Agentを呼び出す |
-| **ナレッジベースノード** | Knowledge Basesを検索する（RAG） |
-| **Lambdaノード** | Lambda関数を呼び出してカスタム処理 |
+| ノードでAI処理チェーン・RAG・プロンプトチェーンを組む | Bedrock Flows |
+| 自律的にツールを選んで実行する | Bedrock Agents |
+| 人間承認待ち・SQS/Kinesis連携・厳密なRetry/Catch | Step Functions |
 
-### Bedrock Flows vs Step Functions
-
-| | Bedrock Flows | Step Functions |
-|---|---|---|
-| 向き | AI処理チェーン・RAGパイプライン | 決定論的処理・外部サービス統合 |
-| 設計方法 | ビジュアルノード（ノーコード寄り） | JSONの状態定義（コード寄り） |
-| AI特化機能 | ✅ プロンプトノード・エージェントノード内蔵 | ❌ 別途Bedrock SDK呼び出しが必要 |
-| waitForTaskToken | ❌ 非対応 | ✅ 対応（人間承認フロー） |
-
-```
-Bedrock Flows が向くケース（Bedrock 内で完結）
-  FM呼び出し → 条件分岐 → KB検索 → FM呼び出し
-
-Step Functions が向くケース（外部をまたぐ）
-  FM呼び出し → DynamoDB書き込み → 人間承認待ち → 外部API呼び出し
-```
-
-### CoT（Chain-of-Thought）との組み合わせ
-
-各推論ステップをプロンプトノードとして定義し、ノードの順番がそのまま思考の順番になる。
-
-```
-[Input: 論文テキスト]
-  ↓ [Prompt ノード①: 「まず前提条件を整理してください」]
-  ↓ [Prompt ノード②: 「次に仮説を立ててください」]
-  ↓ [Prompt ノード③: 「証拠と照合して結論を出してください」]
-  ↓ [Output: 構造化された推論結果]
-```
-
-→「CoT テンプレート」「推論ステップを体系的に管理」が出たら **Bedrock Flows** が正解候補。
-
-### 試験での識別キーワード
-
-| キーワード | 正解 |
-|---|---|
-| 「コードなしで AI パイプライン」「ノードでつなぐ」「条件分岐を含む生成AI」 | **Bedrock Flows** |
-| 「CoT テンプレート」「推論ステップを順番に管理」 | **Bedrock Flows** |
-| 「自律的にツールを選んで実行」 | **Bedrock Agents** |
-| 「人間承認待ち・外部サービスをまたぐ」 | **Step Functions** |
+CoTテンプレートや推論ステップ管理の話も、実装パターンとしては [orchestration.md](./orchestration.md) の Bedrock Flows に寄せる。
 
 ---
 
@@ -1000,4 +919,3 @@ AWSでも同様：
 ### MCPサーバーによるレガシーAPIゲートウェイパターン
 
 レガシーAPI（例：CMS）の前段にMCPサーバーを立て、関数呼び出しスキーマ（semantic・AI向けインターフェース）として公開するパターン。個々のAPIエンドポイントの挙動の不整合はMCPサーバー内部で吸収する。Bedrock AgentCoreをMCPクライアント（エージェント実行環境）として構成すると、AgentCore経由の各エージェントワークフローが同じMCP関数群を呼び出せる。
-

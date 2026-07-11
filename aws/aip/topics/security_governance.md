@@ -214,28 +214,7 @@ SageMaker JumpStart とは：
 
 ## Amazon Q Developer
 
-### 主要機能
-
-| 機能 | 内容 |
-|---|---|
-| コード生成・リファクタリング | 統合コードスニペットの自動生成・整形 |
-| API使用ガイダンス | 対象に合わせた推奨・補完 |
-| パフォーマンス最適化提案 | AIコンポーネントのボトルネック検出 |
-| **テスト自動生成** | **ユニットテスト・統合テストを自動生成してCI/CDパイプラインに組み込める** |
-| セキュリティレビュー | コードの脆弱性・コンプライアンス問題の検出 |
-
-### テスト自動生成のイメージ
-
-```
-通常のフロー：
-  コードを書く → PR → レビュー → テスト書く → マージ
-  問題：テストが後回しになりがち
-
-Q Developer + CI/CD の場合：
-  コードを書く → Q Developer がテストを自動生成
-              → CI/CDパイプラインで自動実行
-              → PRの時点でテスト付き・品質が担保される
-```
+Q Developer の機能マップは [ai_services.md](./ai_services.md) に集約。セキュリティ・ガバナンス文脈では、コードレビュー、脆弱性検出、テスト自動生成を CI/CD 統制に組み込むサービスとして押さえる。
 
 ## SAML フェデレーション
 
@@ -788,15 +767,7 @@ IAM ポリシーには2種類ある：
 
 ### データレイクの列単位アクセス制御
 
-#### Lake Formation → Glue Data Catalog → Athena の連携
-```
-S3（生データ）
-  ↓ Glue Crawler
-Glue Data Catalog（テーブル定義）
-  ↓ Lake Formation（権限管理レイヤー）
-Athena（クエリ実行）
-  → Lake Formation のフィルターが適用された結果のみ返る
-```
+Lake Formation / Glue Data Catalog の詳細は [data_pipeline_integration.md](./data_pipeline_integration.md) に集約。ここでは Bedrock への PrivateLink 接続と、データレイク側の列単位アクセス制御を組み合わせる設計パターンとして扱う。
 
 #### アクセス制御粒度の比較
 | 手段 | 粒度 | クロスアカウント列制御 |
@@ -992,19 +963,13 @@ DeployerRole       → 本番エンドポイントへのデプロイのみ可（
 MonitorRole        → Model Monitor の閲覧のみ可（変更不可）
 ```
 
-## SageMaker Model Monitor 4種類 + Clarify 設定（Task 3.3）
+## SageMaker Model Monitor / Clarify の統制観点（Task 3.3）
 
-### Model Monitor の4種類
+Model Monitor と Clarify の機能詳細は [sagemaker_mlops.md](./sagemaker_mlops.md) に集約。ここでは責務分離に関係するポイントだけ残す。
 
-| 種類 | 何を検出 | 使うもの |
-|---|---|---|
-| データ品質 | 入力データの欠損・分布の変化 | Model Monitor のみ |
-| モデル品質 | 精度・F1スコアの劣化 | Model Monitor のみ |
-| **バイアスドリフト** | 属性間の公平性の変化 | **Clarify モニター（別途設定必要）** |
-| **Feature Attribution ドリフト** | 特徴量の重要度の変化 | **Clarify モニター（別途設定必要）** |
-
-- バイアスドリフト・Feature Attribution ドリフトは **Model Monitor だけでは検出できない**
-- Clarify を使ったモニタリングスケジュールを別途作成する必要がある
+- `ModelEvaluatorRole`: 評価ジョブ・Clarify 実行のみ
+- `MonitorRole`: Model Monitor の閲覧のみ、設定変更不可
+- バイアスドリフトや Feature Attribution ドリフトを監視する場合は Clarify モニターの権限を分ける
 
 ### Feature Attribution ドリフトとは
 
