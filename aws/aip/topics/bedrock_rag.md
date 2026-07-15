@@ -121,9 +121,13 @@ OpenSearch Serverless（ベクトル + メタデータ）
 
 ### 要点
 
-- **完全一致系（ElastiCache のハッシュキー等）では意味の類似は検出不可**
+- **完全一致系（ハッシュキー・TTL・CloudFrontのURL一致等）では意味の類似は検出不可**
 - **キーフレーズ抽出（Comprehend）は構文レベル**で、意味レベルではない
-- **OpenSearch k-NN + 埋め込み**が唯一意味ベースのキャッシュを実現できる組み合わせ
+- **意味ベースのキャッシュには埋め込み＋ベクトル近傍検索（k-NN/KNN）が必須**。対応サービスは複数ある：
+  - **OpenSearch Service**：k-NNプラグイン（近似k-NN、大規模データに強い）
+  - **Amazon ElastiCache for Valkey 8.2**：ベクトル検索機能を公式サポート（セマンティックキャッシュが公式ユースケース）。`FT.SEARCH`+KNN構文。追加コストなし、マイクロ秒オーダーの低レイテンシ
+  - **Amazon MemoryDB for Valkey**：同じくベクトル検索対応（`FT.SEARCH`+KNN構文）。永続性重視のインメモリDB
+  - ⚠️ 訂正（旧記述）：「ElastiCache=完全一致系のみでベクトル検索不可」は**Valkey 8.2以降のベクトル検索機能により古い情報**。ElastiCacheでもValkeyエンジンならKNNベースの意味検索が可能
 
 ---
 
@@ -1551,6 +1555,21 @@ RetrieveAndGenerate API の処理：
 
 - 自前で Retrieve → Prompt組み立て → InvokeModel を実装する必要がない
 - 引用付き回答を標準でサポート（AIP-55でも重要）
+
+### RetrieveAndGenerateStream API（2024年12月GA）
+
+RetrieveAndGenerate と同じ RAG パイプライン（KB検索＋生成）を**ストリーミング形式**で返すAPI。
+検索機能を失わずにチャンク逐次配信ができる。
+
+| API | KB検索 | 応答形式 |
+|---|---|---|
+| **RetrieveAndGenerate** | ✅ 込み | 同期一括（全文完成まで返らない） |
+| **RetrieveAndGenerateStream** | ✅ 込み | ストリーミング |
+| **InvokeModelWithResponseStream** | ❌ なし | ストリーミング（モデル応答のみ） |
+| **Retrieve** | 検索のみ | 同期（生成なし。tool use 連携等で使う） |
+
+- InvokeModelWithResponseStream で RAG を維持するには、Retrieve 呼び出しと
+  検索結果のプロンプト組み込みを**独自実装**する必要がある（＝「ストリーミングにすればRAGも付いてくる」わけではない）
 
 ### Amazon Bedrock Knowledge Base の構造
 

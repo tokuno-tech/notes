@@ -32,7 +32,8 @@
 - CoT は**プロンプトへの指示**（追加インフラ不要）。Extended Thinking（拡張思考）とは別物 → レイテンシ要件では混同しない
 - API Gateway「検証」→ **リクエスト検証ツール（JSONスキーマ）** /「変換」→ **マッピングテンプレート**
 - API Gateway の同期タイムアウト = **29秒**。1分超なら非同期パイプライン（S3→SQS→Lambda）へ
-- 「コード変更なしにモデルプロバイダーを切替＋レスポンス形式を統一＋APIキー安全管理＋キャッシュでコスト最適化」→ **API Gateway 非プロキシ統合 + マッピングテンプレート + ステージ変数（エンドポイントURL保持）+ Secrets Manager + 組み込みキャッシュ**。プロキシ統合(Lambda)やSageMakerエンドポイント一元化は「新プロバイダー対応にコード変更が要る」で即アウト
+- 「コード変更なしにモデルプロバイダーを切替＋レスポンス形式を統一＋APIキー安全管理＋キャッシュでコスト最適化」（**静的な切り替え**）→ **API Gateway 非プロキシ統合 + マッピングテンプレート + ステージ変数（エンドポイントURL保持）+ Secrets Manager + 組み込みキャッシュ**。プロキシ統合(Lambda)やSageMakerエンドポイント一元化は「新プロバイダー対応にコード変更が要る」で即アウト
+- 「ユーザーティア・取引金額・規制ゾーン・1時間ごとに変わるコストメトリクス等**複雑でリアルタイムな条件**でFMルーティング」→ **AppConfig + Lambda**（Agentがlocalhost:2772でキャッシュ提供、ポーリング既定45秒）。同じ「デプロイなし切替」でも**ロジックが複雑・動的値参照が要るとVTL/ステージ変数では表現力不足**で不正解になる（上記の「静的な切り替え」ケースとの分岐は[traps.md](traps.md)参照）。Lambda環境変数（ウォーム実行環境には即時反映されない）・Lambdaオーソライザー（認可用途でTTL300〜3600秒キャッシュ、ルーティング実装の場ではない）も不正解の定番
 - **APIキーの保存場所**が真の争点になる問題に注意：「クライアント側ルーティング」自体は不正解の主因ではなく、「クライアント側コードにAPIキーを保存する」がセキュリティ脆弱性の本体（誰でも解析できるコードに秘密情報を埋め込む構図）
 - FM 出力を後続システムに渡す → **JSON スキーマ強制**で形式固定 / 決定論的なDB操作 → **Text-to-SQL**（計算はDB側）
 
@@ -48,8 +49,9 @@
 - 「事前計画不可・増加量予測不能・他アプリ影響なし・非同期OK」→ **バッチ推論（CreateModelInvocationJob）**（プロビジョンドは事前コミット必須で不正解。バッチもオンデマンドと別キャパシティで動く）
 - オンデマンドのクォータ引き上げは対症療法。プロビジョンド済みキャパシティの未使用問題は解決しない（別枠）→ 根本原因特定が先
 - 分散推論：**テンソル並列化**=重み行列を複数GPUに分割（レイテンシ低下、`tensor_parallel_degree`=分割GPU数）/ **データ並列化**=モデル複製で別バッチ（スループット向上）
+- 「700億パラメータ級（40GB超）のLLMをGPUリアルタイム推論・低運用負荷でデプロイ、起動直後にOOM」→ **SageMaker LMIコンテナ＋複数GPUインスタンス＋テンソル並列化＋量子化**＋大規模モデル向けエンドポイントパラメータ（VolumeSizeInGB・ModelDataDownloadTimeoutInSeconds・ContainerStartupHealthCheckTimeoutInSeconds）を大規模モデル向けに調整。**Lambda（メモリ上限10,240MB・GPU非対応）・SageMakerサーバーレス推論（メモリ上限6,144MB・GPU非対応）は即除外**。単一GPUインスタンスの水平スケールアウトも「各インスタンスが独立してモデル全体をロードする」ため単体のGPUメモリ不足は解消されない罠 → [sagemaker_mlops.md](../topics/sagemaker_mlops.md)
 - 「初期レイテンシ削減」「コールドスタート改善」→ **量子化**（モデルサイズ削減）/「GPU使用率最大化・変動負荷」→ **動的バッチ処理**
-- 「オンプレで推論」「データを外に出せない」「エッジ」→ **SageMaker Neo**（コンパイル→ローカルデプロイ）
+- 「オンプレで推論」「データを外に出せない」「エッジ」→ **SageMaker Neo**（コンパイル→IoT Greengrass V2経由でローカルデプロイ。Edge Managerは2024-04-26 EOL済で現行は非対応）。「クラウドとオンプレのハイブリッド＋バッチの安定スループット」の2つ選択問題では**Bedrock Provisioned Throughput（バッチ側）＋ SageMaker Neo（オンプレ側）**の組み合わせが定番。**Bedrockに"ユーザー設定可能なオートスケーリング"機能はない**上、Bedrockはクラウド専用でオンプレ非対応なのでハイブリッド要件では即除外 → [sagemaker_mlops.md](../topics/sagemaker_mlops.md)
 
 ## 耐障害性・リトライ・ルーティング・キャッシュ
 
@@ -71,6 +73,7 @@
 
 - チャンキング：意味のまとまり・ハルシネーション削減・高精度要約 → **セマンティック** / 概要と詳細両立 → **階層的** / シンプル → **固定サイズ**
 - 「**コンテキストウィンドウを超える長文**＋末尾が無視される＋包括的分析維持」→ **セマンティック境界＋重複(overlap)チャンキング＋RAG取得＋ウィンドウメトリクス追跡**。システム名（分析/要約）でRAGを外さない。**再帰的要約は条項間の相互参照を失うので不正解**、固定チャンク連結も関係を失い不正解
+- 「**多ターン会話が長引くほど入力トークン超過エラー**（ユーザーごとにタイミングが違う）」→ **CountTokens APIで推論前に入力トークン数を計測＋古いターンを要約に置き換え**。`inferenceConfig.maxTokens`は**出力**トークン上限の制御であり**入力**側のコンテキストウィンドウ（モデル固有・固定）とは無関係なので引き上げても無意味（頻出の引っかけ）。Lambdaタイムアウト延長・リトライも「同じ過大な入力を送り続ける限り再発する」ため根本解決にならず、Guardrailsもコンテンツ安全性が目的でコンテキスト超過対策の機能はない。Compaction機能（ベータ）はInvokeModel限定＋Claude Opus/Sonnetのみ対応で**Converse APIでは使えない** → [bedrock_core.md](../topics/bedrock_core.md)
 - 「取得結果の順序・ランキングが悪い」「最関連が下位」→ **Bedrock リランカー**（取りこぼしは救えない＝初回検索の問題は別）
 - 「再現率は十分だが上位を絞りたい（トークン削減）」→ **リランク後に上位N件へ絞る**が正解。リランクせず元の順番のまま上位N件に切る選択肢は、再現率が十分でも本当に関連性の高い文書が下位に埋もれたまま欠落しうる（絞るタイミングが「リランク前か後か」が明暗を分ける）
 - 「ベクトル＋キーワード両方」「略称・専門用語の取りこぼし」→ **ハイブリッド検索（Dense+Sparse / k-NN+BM25）**
@@ -109,7 +112,10 @@
 - 「AgentCore Runtime/Gatewayを企業IdP(Entra ID等)のOIDCで認証・運用負荷最小」→ **AgentCore Identityをインバウンドプロバイダーとして直接設定**（ディスカバリーURL＋許可オーディエンス(aud)の2項目だけで完結）。Cognitoユーザープール経由・IAM Identity Center経由・API Gateway+カスタムLambdaオーソライザーはいずれも別インフラ構築が必要で運用負荷増（罠） → [bedrock_agents.md](../topics/bedrock_agents.md)
 - マルチターン文脈維持：エージェントなら **sessionId**（追加実装不要）/ 自前FM呼び出しなら messages[]自己管理 or DynamoDB
 - Step Functions **Standard vs Express**：人間の応答待ち・承認・数時間処理・監査証跡・重複不可 → **Standard** / 高頻度・短時間・低コスト → **Express**（5分制限。処理内容から常識判断、問題文に明記なくてもよい）
-- 「S3+Lambda+Step Functions Standard(Bedrockオーケストレーション)+DynamoDB」型の構成では、**監査証跡＝Standardの実行履歴(最長1年保持)が担当**、**DynamoDB＝処理ステータス/結果への高速アクセスが担当**（役割が違う。「DynamoDBに書いてあるから監査証跡」と混同しない）
+- 「S3+Lambda+Step Functions Standard(Bedrockオーケストレーション)+DynamoDB」型の構成では、**監査証跡＝Standardの実行履歴（最大**90日間**、Step Functionsサービス自体がAPI取得可能な形で保持。※最大実行"時間"の1年とは別軸なので混同しない）が担当**、**DynamoDB＝処理ステータス/結果への高速アクセスが担当**（役割が違う。「DynamoDBに書いてあるから監査証跡」と混同しない）
+- 「処理完了後も一定期間さかのぼって各ステップの入出力を検索・閲覧」「コンソールでグラフィカルに確認」→ **Step Functions Standard一択**。Express は実行履歴をサービス自体が保持せず（CloudWatch Logs転送が必須）、コンソールのグラフビュー・テーブルビューも使えないため、この手の監査要件では即不正解。ASL（宣言的JSON定義）のChoiceステートでループ継続/終了条件を明示的に記述でき、後から定義変更するだけで済む点も強み → [orchestration.md](../topics/orchestration.md)
+- Bedrock FMの「仮説→検証→判断」反復ループで**エンジニアがループ条件を明示的に定義・変更したい**→ **Step Functions（Choiceステート）**。Bedrock Agentsのオーケストレーションループは内部マネージドエンジンが自律制御するため、この要件には不適合（トレース機能で観測はできるが、ループ制御ロジック自体は書き換えられない）
+- Lambda関数の自己再帰呼び出しでループを実装する設計は**約16回で自動停止**（Lambdaの再帰ループ検出。SQS/S3/SNS/Lambda相互呼び出しが対象）。意図的な多段反復ループの実装には不向きで、グラフィカルな実行確認手段もない → [orchestration.md](../topics/orchestration.md)
 - 人間レビューの承認ワークフロー → **Step Functions + waitForTaskToken**（外部完了待ち→ `SendTaskSuccess` で再開。ポーリングは不正解）
 - 「順次実行＋エラー時フォールバック・運用負荷最小」→ **Step Functions（ASL宣言的）**。Lambda自前実装は引っかけ
 - 「種類の違う処理を同時実行して全部待つ」→ **Parallel** /「可変個数に同じ処理」→ **Map**
@@ -129,9 +135,14 @@
 - 「ユーザーロール別にフィルター強度を変える」→ Lambda で `guardrailIdentifier` を動的選択して InvokeModel
 - 「ドメイン固有の脅威検出」（汎用ガードレールで不可）→ **SageMaker カスタム安全性分類器**
 - 「PII非開示/事実精度などの要件」に対し選択肢が**システムプロンプト/指示文に書くだけ**で対応している場合は不正解になりやすい（指示はLLMへのお願いで強制力なし）。PII→機密情報フィルター、事実精度→グラウンディングチェック/自動推論チェックのように**機械的に検証・除去する機能**が要る
+- 「長文要約でハルシネーション急増＋スループット/レイテンシー維持（2つ選択）」→ **ゼロショットCoT（追加インフラ不要でプロンプトに根拠明示ステップを追加）＋ RAG（Bedrock Knowledge Base＋セマンティックチャンキングでソースに基づかせる）**。温度を上げる・文書丸ごと1パス要約（現状の問題そのもの）は即不正解。「**Guardrailsでパターンマッチしてハルシネーション検知**」という選択肢は**Guardrails＝ハルシネーション対策という連想だけで即選ばない**——グラウンディングチェック/自動推論チェックの実態はGrounding Source（参照ソース）とのスコアリング/形式論理検証であり、パターンマッチという説明自体が仕組みと矛盾するため機能名が正しくても不正解 → [bedrock_rag.md](../topics/bedrock_rag.md) / [bedrock_guardrails.md](../topics/bedrock_guardrails.md)
+- 「実在するカタログ/データにない商品・情報を生成するハルシネーション防止」→ **RAG（Knowledge Base）一択**。Automated Reasoningは「事前に整備した形式論理ポリシーとの数学的検証」で、検索して参照すべき生データ（商品カタログ等）には目的がズレる上detectモードのみでブロックしない。Automated Reasoningが向くのは社内規定・コンプライアンスルールのような「明文化された正誤ルール」との照合
 - 画像の不適切判定 → **Rekognition DetectModerationLabels**（動画対応・専用ラベルが必要な場合、またはBedrock/ガードレールを介さない単独審査） / テキストPII → **Comprehend DetectPiiEntities**
 - **ガードレールのコンテンツフィルターはImageモダリティに直接対応**（Hate/Insults/Sexual/Violence等）。既にBedrock FM呼び出し＋ガードレール構成があるシナリオでRekognition/Comprehendを追加統合する選択肢は**機能重複＝冗長・運用負荷増（罠）**。同一コンテンツを2サービスで二重処理していないか確認する
 - **不正行為（Misconduct）フィルター vs プロンプト攻撃フィルター**：混同注意。不正行為＝AIが犯罪行為・加害・詐欺への関与/情報提供をしないようにするコンテンツフィルターの1カテゴリ（Hate/Insults/Sexual/Violence/Misconductの5分類の一つ）。プロンプト攻撃＝ジェイルブレイク・プロンプトインジェクションをMLで検出する別枠のフィルター。「SQLインジェクション対策」はプロンプト攻撃フィルターの役割で、不正行為フィルターでは対応不可 → [bedrock_guardrails.md](../topics/bedrock_guardrails.md)
+- 「**プロンプトリーケージ**（システムプロンプトを抜き出す攻撃）」検知が要件に出たら → ガードレールは**Standardティア一択**（Classicティアはプロンプトリーケージ検出非対応）。プロンプトインジェクション・ジェイルブレイクだけならどちらのティアでも検出可
+- 「InvokeModel APIでプロンプト攻撃フィルターを使う」→ ユーザー入力を`<amazon-bedrock-guardrails-guardContent_{ランダムサフィックス}>`タグで**必ず**囲む（タグなしだとフィルタが機能しない）。固定サフィックスは予測されてタグ閉じ攻撃を許すため不正解。Converse/ConverseStream APIはタグ付け不要
+- AWS WAF（HTTPレイヤの文字列/サイズマッチ）・Comprehend有害コンテンツ検出（ヘイト/嫌がらせ等のカテゴリスコア）はいずれも**プロンプト攻撃・プロンプトリーケージの意味的検出はできない**（正常なHTTPリクエスト・非有害な文面に見えるため）。この手の攻撃対策は常にGuardrailsのプロンプト攻撃フィルター一択
 - Macie / GuardDuty はセキュリティ監視であってコンテンツモデレーションではない（引っかけ）
 - **S3のPII検出・コンプライアンスレポート** → **Macie**（継続的自動検出） + Comprehend（テキスト内PII API）+ EventBridge + Lambda（自動修復）
 - 「推論前後のPIIマスク＋保持期限の強制」→ **Bedrockガードレール（推論前後でPIIマスク）+ Macie（S3保存データの機密情報検出）+ S3ライフサイクルポリシーのExpirationアクション**。ライフサイクルの「アーカイブストレージへの移行」はTransitionでありデータは削除されない＝保持要件を満たさない罠。ライフサイクルルールはバケットポリシーのdenyより優先実行される → [security_governance.md](../topics/security_governance.md)
@@ -173,6 +184,7 @@
 - 「**体系的な**評価フレームワーク」でFM選定（AIP-5.1）→ **カスタムデータセット + 複数メトリクス（トークン効率・レイテンシ・ビジネス成果）+ 統計的有意差検証** の3点セットが揃う選択肢。systematic = 網羅性（観点を偏らせない）＋ 客観的に繰り返せる仕組み。「〜のみ」「デフォルトデータセット」「統計検証なし」は脱落
 - **人間の専門家が主観品質を評価**（2FM比較等）→ Bedrock人手評価三点セット：①評価ジョブ+カスタムメトリクス（"スタイル正解率"等）②Cognitoでワークフォース管理→作業チーム ③S3にJSONLプロンプト+CORS。組み込みメトリクスの自動評価・Comprehendセンチメント採点は主観品質を測れず不正解
 - **上記との区別**：トーン・フォーマル度等の主観基準自体は**カスタムメトリクスとして定義可能**で、それを**LLM-as-a-judgeが採点するか／人間が採点するか**は問題文の指定次第。問題文が「LLM-as-a-judgeで評価を作成」と明示していれば**カスタムメトリクス＋LLM-as-judge**（コスト効率・毎週等の反復実施に強い）が正解、「人間の専門家が比較評価」と明示していれば人手評価ジョブが正解。「人によるモデル評価」の選択肢は前者の文脈では**コスト増・サイクル長期化・スコアの一貫性低下**で不正解になる。データセットは**エンタープライズ固有の用語/コンテンツパターンを捉えられる人検証データセット**が業界標準ベンチマークより優先される
+- **Bedrock人手評価ジョブ vs SageMaker Ground Truth vs Amazon A2I の3すくみ**：「FM＝人手評価だろ」で即決すると事故る罠。**「比較」か「蓄積（バッチ）」か「都度レビュー（トリガー型）」**を最初に見極める。①「**2つのFMの応答を比較**」→**Bedrock人手評価ジョブ**（ワーカーUIはAWS管理でHTMLカスタマイズ不可）②「**採点画面をHTMLで自由にカスタマイズ**」「**S3データを一括配布してラベリングジョブとして進捗管理**」「**教師データとして継続蓄積・微調整に再利用**」→**SageMaker Ground Truthカスタムラベリング**（入出力マニフェストでバッチ管理）③「**推論のたびに/信頼度が低い時だけアプリが能動的にレビューをトリガー**」→**Amazon A2I**（`StartHumanLoop`呼び出し都度の単発レビュー。バッチ一括配布には不向き。ワーカーUIはGround Truthと同じCrowd HTML ElementsでHTMLカスタマイズ自体は可能） → [model_evaluation.md](../topics/model_evaluation.md)
 
 ## 評価・モニタリング・オブザーバビリティ
 
@@ -225,6 +237,7 @@
 - 「クロスアカウントで検索アクセスを委譲」→ Q Business **Data Accessor ロール**
 - Q Business の RBAC＋運用負荷最小：**データソースのセキュリティグループマッピング**（既存エンタープライズロールを自動反映、組み込み機能）が正解。「セキュリティグループに基づくデータソース**フィルター**を作成する」は粒度不足＋カスタム構築＝不正解筋。CloudWatchアラーム自作も同様に不正解（Q Businessは監視機能を組み込み済み）
 - 「マルチモーダル文書の構造化を自前パイプラインなしで」→ **Bedrock Data Automation**（ブループリント+信頼度）
+- 「データソースからの**エンドツーエンドのデータリネージ**（出所・変換過程）を自動追跡・可視化、HIPAA等の監査対応」→ **DataZone**（OpenLineage互換、Glue/Redshiftから自動キャプチャ）が正解。**Glue Data Catalog単体はメタデータリポジトリでしかなくリネージ追跡機能はない**（DataZoneとの統合が必要）。「データソースの一元登録・技術メタデータ管理」だけならGlue Data Catalogで十分だが、"リネージ"というキーワードが出たらDataZoneに寄せる → [ai_governance.md](../topics/ai_governance.md)
 - **BDAは1プロジェクト内の複数ブループリントからは自動選択できるが、複数プロジェクトをまたいだ自動選択はできない**（`InvokeDataAutomationAsync`はプロジェクトを明示指定する必要がある）。「請求書タイプごとに別プロジェクトを作りBDAに最適プロジェクトを判定させる」は不成立、正解は**1プロジェクトに複数ブループリントをまとめて登録**。文書タイプ分類に**Rekognition Custom Labels**を持ち出す選択肢も罠（顔分析/文字検出/コンテンツ検出用には非設計、BDA標準機能と機能重複で運用増）。**Textract AnalyzeDocument Queries**は自然言語の質問で該当箇所を抽出できるがBDAのような分類〜抽出の一括自動化ではない → [ai_services.md](../topics/ai_services.md)
 - **Bedrockナレッジベースはオーディオ/ビデオをネイティブサポートしない**（S3経由でサポートするのはドキュメント＋画像JPEG/PNGまで）。「決算発表のA/V録音を含む大量非構造化データをRAG化・運用負荷最小」→ **BDAをパーサーとして指定しKBに組み込む**が正解。Textract+Transcribeの個別処理やClaudeへの構造化プロンプトでのマルチモーダル処理は複数サービス調整/プロンプトメンテで運用負荷増（罠）→ [ai_services.md](../topics/ai_services.md)
 - 「画像・動画を直接分析・カスタムモデル不要」→ **Bedrock マルチモーダルFM** / 可視化 → **QuickSight**（QuickSight Q は画像分析不可）
@@ -233,6 +246,8 @@
 
 - 「フロントエンド開発者がUI・認証・Bedrock接続を素早く」→ **Amplify**（宣言的・UI込み）/ インフラエンジニアのIaC → **CDK**
 - 「GraphQL・リアルタイム・フロントからBedrock呼び出し」→ **AppSync**（Subscription=WebSocket、`useAIConversation` フック）
+- 「Amplify + AppSync + Bedrock（KB）でタイムアウト・応答が遅い」→ **Amplify AI Kit**（ストリーミング）。API Gateway WebSocketへの置換は過剰な再設計で不正解、Lambdaタイムアウト延長はAppSyncの30秒ハードリミット（変更不可）があるため不正解
+- 「AI KitのKB連携」→ **a.ai.dataTool**（Converse APIのtool useでRetrieve API呼び出し）/ RAG込みのストリーミングAPI → **RetrieveAndGenerateStream**（InvokeModelWithResponseStreamはKB検索なし）
 - 「DynamoDB + AppSync」→ カスタムResolver不要・最小実装 / 複雑ロジック → Lambda Resolver
 - 「SaaS名（Salesforce等）が出たら」→ **AppFlow**（双方向同期）
 - 「レガシー・既存メッセージング・移行」→ **Amazon MQ** /「新規・AWSネイティブ」→ SQS/SNS
@@ -245,6 +260,7 @@
 - 「Step Functionsで多段階推論を"最も一貫性のある方法"で実装」→ **各状態に固定プロンプトのReActステートマシン**。Choice状態で中間応答に応じ動的に経路を分岐させる案は柔軟に見えて不正解（軸が一貫性の時は固定ステートが勝つ。軸が最適化/振り分けなら動的分岐が正解になる逆転もあるので設問の軸を要確認）
 - 「顧客データからパーソナライズメール生成」→ Bedrock + Lambda /「セグメントに一斉配信」→ **Pinpoint**
 - 「プロンプトのバージョン管理・劣化バージョン特定」→ **Bedrock Prompt Management**
+- 「**静的な**システムプロンプト/ツール定義/長文コンテキストの**入力トークンコスト削減**＋レイテンシー改善＋API変更最小限」→ **プロンプトキャッシュ**（Converse APIの`system`/`messages`/`tools`に`cachePoint`を明示配置、最大4箇所。TTLは多くのモデルで5分、Opus 4.5/Sonnet 4.5/Haiku 4.5は1時間オプションあり）。**「応答をキャッシュする」機能だと誤解しない**——実際は入力の再計算を省く仕組み。Prompt Management（バージョン管理が目的、リソース参照に変えても入力トークンは毎回全処理）・プロビジョンドスループット（スループット予約で入力トークン課金構造は不変）・バッチ推論（非同期でリアルタイム要件に反する）はいずれも入力トークンコスト削減という核心要件を満たさず不正解 → [bedrock_resilience.md](../topics/bedrock_resilience.md)
 - 「著作権/コンプライアンス監査＋プロンプトの証跡＋FM使用状況ログ＋リネージュ自動追跡」→ **S3サーバーアクセスログ（証跡）+ CloudTrail（Bedrock API記録）+ Prompt Management（バージョン/リネージュ）**。S3オブジェクトタグ・タグポリシー・DynamoDB自作メタデータは全部「手動」扱いで不正解（自動リネージュにならない）
 - CloudTrailで`InvokeModel`/`Converse`系は**management eventで自動記録**（追加設定不要）／`InvokeAgent`・`Retrieve`・`InvokeFlow`は**data eventで明示的な有効化が必要**（罠：「CloudTrail有効化だけ」でエージェント/KB/Flow監査は不十分）
 
@@ -280,7 +296,8 @@
 - 「特定VPCエンドポイント経由のみ許可」→ `aws:SourceVpce` 条件キー
 - 「列単位アクセス制御をクロスアカウント」→ **Lake Formation LF-Tag**（Athena WG・Glue リソースポリシーは列単位不可）
 - 「複数リージョンで同じデータを復号」→ **KMS マルチリージョンキー** /「複数アカウントでリソース共有」→ **RAM**
-- 「クロスアカウントで Bedrock KB を共有」→ リソースベースポリシー
+- 「クロスアカウントで Bedrock KB を共有」→ リソースベースポリシー。**リソースベースポリシーはAWSのデフォルト暗黙権限ではなく、リソース側に明示的にアタッチするポリシー**（IDベースポリシーの対概念）。Secrets Managerではシークレット単位でこれを設定しロール別アクセス制限が可能
+- 「APIキー等のシークレットを動的取得＋一元管理＋自動ローテーション＋運用負荷最小」→ **AWS Secrets Manager**（ネイティブ自動ローテーション＋IAM/リソースベースポリシー）一択。**Parameter Store・DynamoDB・Lambda環境変数はいずれもネイティブの自動ローテーション機能を持たず**、EventBridge+Lambdaで自前パイプラインを組む必要があり運用負荷が増える不正解の定番 → [security_governance.md](../topics/security_governance.md)
 - 「プロンプト・応答を長期保持・規制対応」→ Bedrock 呼び出しログ → **S3 + Object Lock（コンプライアンスモード）**（削除不可・改ざん防止）
 - 「組織全体でAIデータのオプトアウトを強制」→ Organizations の **AI Services Opt-Out Policy** /「タグ書式統一」→ タグポリシー
 - 「規制業界でデプロイ権限を分離」→ IAM ロールによる責務分離 + Step Functions 承認
@@ -330,10 +347,11 @@
 - 「モデル呼び出しメトリクスでオートスケール」→ **プロビジョンドスループット**（EC2/Lambda/SageMakerは不正解。Bedrockはフルマネージド）
 - Bedrockオンデマンド = AWSが完全自動スケール（設定不要）/ プロビジョンドスループット = MU購入で保証スループット確保
 - 「定型・FAQ・完全一致クエリのキャッシュ」→ **CloudFront エッジキャッシュ**（決定論的ハッシュ・完全一致のみ）
-- 「類似クエリのキャッシュ」→ **セマンティックキャッシュ（OpenSearch）**（embedding類似度で判定・FMを呼ばない）
+- 「類似クエリのキャッシュ」→ **セマンティックキャッシュ**（embedding類似度で判定・FMを呼ばない）。対応サービスは **OpenSearch k-NN / ElastiCache for Valkey 8.2 / MemoryDB for Valkey** の複数あり（いずれも`FT.SEARCH`+KNN構文または同等のANN機能）。「管理負荷最小＋インメモリの超低レイテンシ」なら**ElastiCache for Valkey**（追加コストなしでベクトル検索が公式ユースケース）が有力。選択肢が「クエリ・応答の**テキストペア**を格納」と書いていても埋め込みベクトル未使用という意味ではない（k-NN明記＝内部でベクトル化前提）。コストが問われていない設問でコスト直感を理由に除外しない。MemoryDB/ElastiCacheの**RANGEクエリ**（正しくは`FT.SEARCH`+KNN構文）・DynamoDB DAX/TTLの**完全一致・ハッシュキー**（DynamoDBは構造的にベクトル距離計算ができない。LIKE演算子も存在せず`begins_with`のみ）・**ステミングのみ**（語幹抽出止まりで同義語を吸収できない）・CloudFront（URL/クエリパラメータの完全一致のみ）はいずれもクエリ手法/機能の指定ミスで不正解 → [bedrock_guardrails.md](../topics/bedrock_guardrails.md) / [bedrock_rag.md](../topics/bedrock_rag.md)
 - 「結果フィンガープリンティング」→ **出力ハッシュで重複排除**（HIT判定はしない。保存フェーズのDB効率化が主目的）
 - キャッシュHIT判定の順序：L1（CloudFront/完全一致）→ L2（ElastiCache/完全一致）→ L3（OpenSearch/類似）→ FM呼び出し
 - 「コスト配分追跡・機能別コスト可視化」→ **Cost Explorer + タグ戦略**（bedrock:feature/team/env タグを付与）
+- 「支出パターンの変化を機械学習で自動検知＋Bedrock含む全AWSサービスを自動監視＋即時SNS通知＋24時間の検知遅延は許容」→ **AWS Cost Anomaly Detection（AWSマネージドモニター＋AWSサービスディメンション＋個別アラート）**。**AWS Budgetsに機械学習の異常検出機能はない**（固定閾値との比較のみ、混同注意）。カスタマーマネージドモニターは**AWSサービスディメンション非対応**（リンクアカウント/タグ/コストカテゴリの個別指定のみ）なので「特定サービスを個別指定した全サービス監視」は成立せず不正解。CloudWatch異常検知（推定請求額メトリクス）は単一集計値でサービス別の根本原因分析ができず不十分。日次/週次サマリーは即時性に欠け不正解 → [cost_management.md](../topics/cost_management.md)
 - 「エラー時にサービスを継続」→ **モデルフォールバック**（Fable5→Sonnet→Haiku の段階切替。可用性優先）
 - 「エージェント暴走・無限ループ防止」→ **停止条件**（Bedrockエージェント: maxSessionDuration / Step Functions: TimeoutSeconds）
 - 「プロンプト最適化の自動化」→ **Step Functions**（チューニングフェーズ専用。本番リクエスト処理には使わない）

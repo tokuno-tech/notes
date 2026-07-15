@@ -412,6 +412,14 @@ Subscription の仕組み
   → クライアント側はポーリング不要でリアルタイムにデータを受け取れる
 ```
 
+**AppSync の30秒ハードリミット**
+
+- Query / Mutation の実行には **30秒のハードリミット**があり、**変更不可**
+- Lambda リゾルバー側のタイムアウトを15分に設定していても、AppSync 経由の同期呼び出しは30秒で打ち切られる
+- LLM の長い応答生成（複雑な質問の RAG など）は30秒を超えやすい
+  → 同期 RequestResponse 型 Lambda リゾルバーでは構造的に解決できない
+  → Subscription（WebSocket）ベースのストリーミング配信に切り替えると、単一リクエストの30秒制約に縛られない
+
 ---
 
 ### AWS Amplify AI Kit とは
@@ -419,7 +427,7 @@ Subscription の仕組み
 ```
 Amplify AI Kit
   = Amplify Gen 2 に組み込まれた AI 機能セット
-  = Amazon Bedrock との接続・ストリーミングを宣言的に設定できる
+  = Amazon Bedrock との対話（Conversation ルート）をストリーミングで宣言的に構築できる
 
 できること
   ① Bedrock との接続設定（モデル指定・プロンプト定義）
@@ -429,7 +437,45 @@ Amplify AI Kit
 開発者がやること
   → amplify/ai/ に conversation ルートを定義するだけ
   → Bedrock との接続・WebSocket の管理・チャンク受信はフレームワークが自動処理
+  → Conversation ルートを設定すると AppSync API・Lambda 関数・DynamoDB（会話履歴保存用）が
+    自動的にプロビジョニングされる
 ```
+
+**ストリーミングの内部アーキテクチャ（公式確認済み）**
+
+```
+クライアント（React: useAIConversation フック）
+  ↑ AppSync Subscription（WebSocket）でチャンクをリアルタイム受信
+AppSync
+  ↑ Lambda がチャンクを AppSync に送信
+Lambda（AI Kit が自動生成）
+  ↑ Bedrock の Converse API（ストリーミング）を呼び出してチャンクを受信
+Amazon Bedrock
+```
+
+- **RetrieveAndGenerate や InvokeModelWithResponseStream を直接呼ぶ構成ではない**。
+  バックエンド Lambda が呼ぶのは **Converse API**
+- ブラウザへの HTTP ストリーミングではなく、**AppSync の WebSocket インフラ**を配信路に使う
+- 同期 RequestResponse 型 Lambda リゾルバーを非同期ストリーミングに置き換えることで、
+  AppSync の30秒クエリタイムアウトに縛られず、TTFT（最初の文字表示）も大幅短縮
+
+**Bedrock Knowledge Bases との連携（dataTool / tool use）**
+
+```
+仕組み：Converse API の tool use 機能を介して KB 検索を組み込む
+
+① Amplify データスキーマで a.ai.dataTool として KB 検索用カスタムクエリを定義
+   （例: "searchDocumentation" ツール。a.ref() でカスタムクエリを参照）
+② カスタムクエリの実体は AppSync の HTTP データソース
+   → Bedrock agent runtime エンドポイントに AWS 署名認証で接続
+③ JavaScript リゾルバーが Retrieve API（/knowledgebases/{id}/retrieve）を呼び出し、
+   検索結果を整形して LLM に返す
+④ LLM が必要と判断したときに KB 検索ツールを呼び出す RAG がストリーミングで成立
+⑤ IAM は bedrock:Retrieve アクションを KB リソースに対して明示的に許可
+```
+
+→ 既存の Knowledge Base 資産を活かしたまま、Amplify + AppSync スタック上で
+  ストリーミング RAG を最小限の変更で実現できるのが AI Kit の最大の利点
 
 ---
 
