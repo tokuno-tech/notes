@@ -159,23 +159,17 @@ Kendra が算出する関連性スコア：
   検索の質 ≠ 生成の質
 ```
 
-### Amazon CloudWatch Synthetics
+### CloudWatch Synthetics との境界
 
-#### 一言で
+CloudWatch Synthetics は評価サービスではなく、Canary を定期実行する外形監視サービス。詳細は [monitoring_observability.md](./monitoring_observability.md) に集約。
 
-> **Canary（カナリア）スクリプトを定期実行してAPI・Webアプリの可用性・パフォーマンスを合成監視するサービス。**
-
-#### 何をするか
+モデル評価文脈では、以下のように補助的に使う。
 
 ```
-Canary スクリプト（Node.js / Python）を定期実行：
-  ├─ HTTP エンドポイントの死活監視
-  ├─ API の正常動作確認（事前定義のレスポンスと比較）
-  ├─ Webサイトのページ読み込みチェック
-  └─ レイテンシー・エラー率の測定
-
-→ 結果をCloudWatch メトリクスに記録
-→ しきい値超過でアラーム発報
+代表プロンプトをCanaryで定期実行
+  → レイテンシー・エラー・簡易な期待応答を監視
+  → 継続的な外形監視として使う
+  → 厳密な品質評価は Bedrock Evaluations / LLM-as-a-judge / 人間評価
 ```
 
 ### LLM-as-a-judge（評価者モデルによる自動採点）

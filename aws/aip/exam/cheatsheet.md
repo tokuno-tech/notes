@@ -99,11 +99,11 @@
 - KB サポート形式 = **PDF/MD/TXT/DOC/DOCX/HTML/CSV/XLS/XLSX**、**1ファイル50MB上限**（画像はJPEG/PNG 3.75MB）。取り込みエラー＝大PDFがサイズ超過 → **大きなドキュメントを分割**（形式変換/S3圧縮/タイムアウト延長は無関係。PDFはネイティブ対応・タイムアウトは設定不可）
 - 「古いドキュメントを無視/最新のみ参照させる」→ **メタデータフィルター（modification_time系フィールドで greaterThan 等）** が正解。プロンプトテンプレート＝モデルの応答制御であり検索対象の絞り込みは不可、セマンティック検索単体も新しさでは絞れない
 
-## Agents・MCP・Prompt Flows・オーケストレーション
+## Agents・MCP・Bedrock Flows・オーケストレーション
 
 - **Bedrock 単体は Lambda を呼べない**（受動的API）。Lambda を呼ぶのは **Agents の Action Group** か Strands 等のコード側ループ
 - 「複数ステップ・推論・複雑なタスク」→ **エージェント基盤（Strands / Bedrock Agents）**。「Lambda + Bedrock」は基本統合で不正解側
-- 「ノーコード・FM呼び出しをノードでつなぐ」「CoTテンプレ・推論ステップ管理」→ **Prompt Flows** /「自律的にツール選択」→ **Agents**
+- 「ノーコード・FM呼び出しをノードでつなぐ」「CoTテンプレ・推論ステップ管理」→ **Bedrock Flows** /「自律的にツール選択」→ **Agents**
 - 「疎結合」「動的ツール選択」→ **Strands + MCP**（Step Functions/Flows は密結合・固定パス）
 - MCP：「複数FMで標準化されたツール接続」「FMを変えても接続を変えたくない」「運用負荷最小」→ **MCP**（相互運用性）
 - Agents 構築：マネージドで素早く → **Bedrock Agents** / コードで細かく・マルチプロバイダ → **Strands** / 専門エージェント振り分け → **Agent Squad**

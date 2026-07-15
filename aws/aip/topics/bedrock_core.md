@@ -17,9 +17,11 @@
 
 ## ストリーミング応答のアーキテクチャ
 
-### 構成
+### 代表構成（リアルタイムチャット）
 
 **API Gateway WebSocket API + Lambda + Bedrock InvokeModelWithResponseStream**
+
+WebSocket は HTTP レスポンスストリーミングそのものではなく、Lambda が Bedrock のチャンクを受け取り、`postToConnection` でクライアントへ逐次プッシュする構成。
 
 ```
 クライアント
@@ -91,14 +93,16 @@ Lambda → postToConnection → クライアントへプッシュ
 
 ## Lambda レスポンスストリーミング と API Gateway のバッファリング問題（AIP-77）
 
-### 重要な誤解：「API Gateway 経由でもストリーミングできる」→ ❌
+### HTTP レスポンスストリーミングと API Gateway
 
 ```
-API Gateway REST API  → バッファリング（ストリーミング不可）
-API Gateway HTTP API  → バッファリング（ストリーミング不可）
-→ Lambda 側を RESPONSE_STREAM に設定しても、
-  API Gateway が間に入るとチャンク転送の効果が失われる
+Lambda response streaming の代表的な呼び出し口：
+  ・Lambda Function URL（invoke mode: RESPONSE_STREAM）
+  ・Lambda InvokeWithResponseStream API（SDK / 直接API）
+  ・API Gateway proxy integration（InvokeWithResponseStream 経由）
 ```
+
+試験・設計でまず押さえる軸は「HTTP のチャンク転送が必要なのか」「WebSocket のメッセージプッシュでよいのか」。API Gateway の細かい対応可否は更新されやすいため、最新ドキュメント確認対象。
 
 ### WebSocket API はストリーミングとは別概念
 
@@ -154,8 +158,7 @@ Lambda 関数 URL（Function URL）：
 | 構成 | ストリーミング | サービス数 | 運用負荷 |
 |---|---|---|---|
 | **Lambda Function URL + RESPONSE_STREAM** | ✅ ネイティブ | 2 | 最小 |
-| API Gateway REST API + Lambda | ❌ バッファリング | 2 | 中 |
-| API Gateway HTTP API + Lambda | ❌ バッファリング | 2 | 中 |
+| API Gateway proxy integration + Lambda | △ 対応可否・制約を公式確認 | 2 | 中 |
 | API Gateway WebSocket + Lambda | △ メッセージベース | 2〜4 | 高（接続管理要） |
 | CloudFront + Lambda Function URL | ✅ | 3 | 中（WAF等必要な場合） |
 
@@ -249,31 +252,15 @@ Task（.waitForTaskToken）でトークンを発行 → ステートマシン一
 | 完了検知の遅延 | **ほぼゼロ**（コールバック即時） | ポーリング間隔分の遅延あり |
 | 状態の永続性 | Step Functionsが保証 | 自前で状態管理が必要 |
 
-### Standard vs Express — 課金モデルとユースケースの違い
+### Standard vs Express の判断
 
-課金モデルが根本的に異なるため、**要件を見た瞬間にどちらか絞れるようにする**。
+Step Functions の一般的な比較は [orchestration.md](./orchestration.md) に集約。ここではマルチターン対話の結論だけ覚える。
 
-#### 課金モデル比較
-
-| 項目 | Standard | Express |
+| 要件 | 選ぶべき | 理由 |
 |---|---|---|
-| **課金単位** | **状態遷移の回数** × 処理時間 | **実行回数** × **実行時間（秒）** × **メモリ** |
-| 待機中のコスト | **なし**（遷移が発生しない間は無課金） | **あり**（待機していても実行時間が加算される） |
-| 最大実行時間 | **1年** | **5分** |
-| 実行履歴 | **Step Functions コンソールで参照可能**（監査・デバッグ向き） | CloudWatch Logs への書き出しが必要（コンソールで追跡不可） |
-| 冪等性保証 | **Exactly-once**（重複実行なし） | **At-least-once**（重複実行あり得る） |
-| `.waitForTaskToken` | **使える**（1年以内なら任意の時間待機可） | **使えるが最大5分で強制終了** |
-
-#### ユースケースの選び方
-
-| 要件キーワード | 選ぶべき | 理由 |
-|---|---|---|
-| 人間の承認・応答待機（分〜時間単位） | **Standard** | 5分超の待機に対応。待機中コストなし |
-| 長時間ML再学習パイプライン（数時間） | **Standard** | 最大1年の実行時間。冪等性保証で再試行安全 |
-| 監査ログ・実行履歴を残したい | **Standard** | コンソールで全遷移を追跡可能 |
-| 高頻度・短時間バッチ（秒〜分単位、1日数千〜数万回） | **Express** | 実行回数×時間課金のため、短時間大量実行でコスト有利 |
-| イベントストリーム処理（Kinesis/SQS連携） | **Express** | 高スループット向け。重複許容できるストリーム処理と相性◎ |
-| リアルタイムAPI応答オーケストレーション（〜秒） | **Express** | 5分以内に完結するなら低コスト |
+| ユーザーの追加回答を待つ | **Standard** | `.waitForTaskToken` で長時間待機でき、待機中の実行時間課金がない |
+| 監査・デバッグで実行履歴を追いたい | **Standard** | 実行履歴をステートマシン側で保持できる |
+| 秒単位で完結する高頻度処理 | Express | 対話の待機ではなく短時間大量実行向き |
 
 ### DynamoDB を選ぶ理由（対話履歴ストア）
 
@@ -787,6 +774,10 @@ Bedrock に呼び出しログへのアクセス許可を付与すれば、ログ
 
 CoT（Chain-of-Thought）プロンプトで期待通りの推論が得られない場合の診断。
 
+関連する置き場：
+- RAGでのハルシネーション削減・Extended Thinkingとの違い → [bedrock_rag.md](./bedrock_rag.md)
+- CoTテンプレートをノードとして管理する実装 → [orchestration.md](./orchestration.md)
+
 | 失敗パターン | 症状 | 対処 |
 |------------|------|------|
 | **推論の途中飛躍** | 中間ステップをスキップして結論に飛ぶ | 「ステップごとに番号を振れ」と明示指示 |
@@ -841,10 +832,12 @@ Safetensorsは**Hugging Faceが作った重み保存形式そのものの名前*
 
 ## Bedrock Prompt Management の設定（公式模試2週目）
 
-- 再利用可能・パラメータ化テンプレート（クライアント別トーン/フォーマット）
-- **アクティベーション前のレビュー・承認** → **バージョニング＋レビューワークフロー**（「保存ごとに自動で新バージョン有効化」は承認前レビューに反するので✗）
-- スタイル制約の強制（絵文字/カジュアル表現の制限）→ **Bedrockガードレール**（ワード/コンテンツフィルター）
-- 使用状況・テンプレート変更の**監査** → **CloudTrail**（誰が何を操作/変更したかの証跡）
+Prompt Management の機能詳細は [bedrock_agents.md](./bedrock_agents.md) に集約。ここでは API 設計文脈で出やすい組み合わせだけ残す。
+
+- 再利用可能・パラメータ化テンプレート（クライアント別トーン/フォーマット） → Prompt Management
+- スタイル制約の強制（絵文字/カジュアル表現の制限） → Bedrock Guardrails
+- 使用状況・テンプレート変更の監査 → CloudTrail
+- 統制・承認ワークフロー観点は [security_governance.md](./security_governance.md) を参照
 
 ## Bedrock サービスエンドポイント 4種（コントロールプレーン / データプレーン）
 

@@ -375,6 +375,24 @@ Comprehendノード（PII除去）
 - ✅ **条件分岐を含む生成AIフロー**（回答品質に応じて別プロンプト）
 - ✅ **ローコードで素早くプロトタイピング**
 
+#### CoT / 推論ステップ管理との関係
+
+CoT（Chain-of-Thought）自体はプロンプト設計パターン。Bedrock Flows は、複数の推論ステップをプロンプトノードとして順番に管理したい場合の実装候補になる。
+
+```
+[Input]
+  ↓ Prompt Node 1: 前提を整理
+  ↓ Prompt Node 2: 仮説を立てる
+  ↓ Prompt Node 3: 証拠と照合して結論
+  ↓ Output
+```
+
+| 文脈 | 置き場 |
+|---|---|
+| CoTの失敗パターン・プロンプト改善 | [bedrock_core.md](./bedrock_core.md) |
+| CoTテンプレートをノードとして一貫管理 | Bedrock Flows |
+| CoTとExtended Thinkingの違い | [bedrock_rag.md](./bedrock_rag.md) |
+
 #### Bedrock Flows の**制限・不得意**なこと
 
 | 制限 | 理由 |
