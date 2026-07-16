@@ -22,8 +22,8 @@
 
 ## Bedrock コア・API・推論パラメータ
 
-- レスポンスストリーミングが要件 → **Lambda Function URL（RESPONSE_STREAM）**。API Gateway HTTP API は非対応
-- REST API はリアルタイムストリーミング不可（タイムアウト・サイズ制限）/ 双方向リアルタイム → **WebSocket API**
+- レスポンスストリーミングが要件 → **REST APIの`STREAM`転送モード（Lambda proxy統合、2025-11〜対応）またはLambda Function URL（RESPONSE_STREAM）**。**HTTP APIは引き続き非対応**（REST APIのみの機能。公式ドキュメント`response-transfer-mode.html`で確認済み・2026-07-16）。REST API側はストリーミング15分・10MB超/29秒超も回避可能だが、キャッシュ/コンテンツエンコーディング/VTLレスポンス変換とは併用不可
+- **（訂正）REST APIは2025-11〜ストリーミング対応済み**（上記参照。旧メモ「REST APIはストリーミング不可」は誤り）/ 双方向・任意タイミングでのプッシュが要る → **WebSocket API**
 - 「セッション管理・双方向・ストリーミング」の複合要件で「ストリーミング＝バッファリングしない＝API Gateway排除」と早合点しない。WebSocket APIは1レスポンスを溜める概念がなく`PostToConnection`で都度送るだけ＝バッファリング回避と両立する。手動HTTPチャンク転送エンコーディングの自作は運用負荷増の罠
 - 「複数モデルを比較・切り替え」「マルチターン対話」→ **Converse API**（統一インターフェース）
 - temperature 高 = 多様性増 → ハルシネーション増。「事実精度を高めたい」で temperature を上げる選択肢は**必ず不正解**
@@ -72,6 +72,7 @@
 ## RAG・ベクトルストア・検索精度
 
 - チャンキング：意味のまとまり・ハルシネーション削減・高精度要約 → **セマンティック** / 概要と詳細両立 → **階層的** / シンプル → **固定サイズ**
+- 「大規模コーパス＋複数セクション（方法論/結果/考察等）をまたぐクエリ＋関連段落の意味的文脈を保持」→ **階層的チャンキング**（子＝精密検索、親＝広い文脈でFMへ渡す）。セマンティックチャンキングは意味のまとまりは作れるがフラット構造で親子の階層を持たず複数セクション横断には弱い、固定サイズは論理展開を機械的に分断、チャンキングなしは大規模件数では手動分割が非現実的＋埋め込みモデルのコンテキスト長超過リスク → [bedrock_rag.md](../topics/bedrock_rag.md)
 - 「**コンテキストウィンドウを超える長文**＋末尾が無視される＋包括的分析維持」→ **セマンティック境界＋重複(overlap)チャンキング＋RAG取得＋ウィンドウメトリクス追跡**。システム名（分析/要約）でRAGを外さない。**再帰的要約は条項間の相互参照を失うので不正解**、固定チャンク連結も関係を失い不正解
 - 「**多ターン会話が長引くほど入力トークン超過エラー**（ユーザーごとにタイミングが違う）」→ **CountTokens APIで推論前に入力トークン数を計測＋古いターンを要約に置き換え**。`inferenceConfig.maxTokens`は**出力**トークン上限の制御であり**入力**側のコンテキストウィンドウ（モデル固有・固定）とは無関係なので引き上げても無意味（頻出の引っかけ）。Lambdaタイムアウト延長・リトライも「同じ過大な入力を送り続ける限り再発する」ため根本解決にならず、Guardrailsもコンテンツ安全性が目的でコンテキスト超過対策の機能はない。Compaction機能（ベータ）はInvokeModel限定＋Claude Opus/Sonnetのみ対応で**Converse APIでは使えない** → [bedrock_core.md](../topics/bedrock_core.md)
 - 「取得結果の順序・ランキングが悪い」「最関連が下位」→ **Bedrock リランカー**（取りこぼしは救えない＝初回検索の問題は別）
@@ -88,6 +89,8 @@
 - 選択肢の **Elasticsearch はベクトル非対応で即脱落** / **Comprehend がクエリ理解・拡張の選択肢なら不正解**（構文レベル止まり）
 - **OpenSearch Serverlessの403エラー**：IAM権限は`aoss:`プレフィックス（`es:ESHttp*`はマネージドドメイン用で無効）。データプレーンアクセスは`aoss:APIAccessAll`+`aoss:DashboardsAccessAll`の**2つセット必須**＋**データアクセスポリシー（IAMとは別体系、`Resource`にワイルドカードでパターン自動適用可）**の両方が要る。同期成功済みならネットワーク（VPCエンドポイント）は原因から除外 → [bedrock_rag.md](../topics/bedrock_rag.md)
 - 「OpenSearch への取り込み」→ **OpenSearch Ingestion** /「汎用ETL・増分」→ **Glue** /「品質・GUI変換」→ **Glue DataBrew**
+- 「マルチモーダル(動画・音声・センサー等)データの前処理」でSageMaker Processingが選択肢に出て混乱したら → **Processingは学習専用ではなく汎用スクリプト実行基盤**（Rekognition/Comprehend/Transcribeのような特定データ型専用サービスではなく、任意の前処理コードを実行できる場）。Transcribe(音声→テキスト)等の専用サービスと**組み合わせて**使われることが多い → [sagemaker_mlops.md](../topics/sagemaker_mlops.md)
+- 「大量ファイル(S3)のPII除去＋埋め込み生成＋期限内＋運用オーバーヘッド最小」→ **Step Functions Distributed Map（S3を最大10,000並列処理）+ Comprehend（PII検出）+ Bedrock InvokeModel（埋め込み）+ OpenSearch Serverless**。「データパイプライン＝Glue/EMR」という連想は罠——**Glue+SageMaker Processing・EMR+UDFはいずれも異なるサービス同士を自前で連携させる構成で運用増**。Lambda単体も15分実行制限で大規模データには不適合 → [bedrock_rag.md](../topics/bedrock_rag.md)
 
 ## Knowledge Base 運用
 
@@ -115,6 +118,10 @@
 - AgentCore：既存Pythonをデプロイ・インフラ最小 → **Runtime** / HTTPサーバ自動管理 → **SDK(@app.entrypoint)** / コンテナ化自動 → **スターターツールキット**
 - レガシーAPI統合＋「複数エージェントで再利用」「運用負荷最小」→ **MCPサーバー（関数呼び出しスキーマ）＋AgentCore**／REST変換・プロキシ層は見た目の標準化のみで関数呼び出しの抽象化・再利用機構がなく不正解／エージェントごとのサイドカーミドルウェアは重複デプロイでスケールせず不正解
 - 「AgentCore Runtime/Gatewayを企業IdP(Entra ID等)のOIDCで認証・運用負荷最小」→ **AgentCore Identityをインバウンドプロバイダーとして直接設定**（ディスカバリーURL＋許可オーディエンス(aud)の2項目だけで完結）。Cognitoユーザープール経由・IAM Identity Center経由・API Gateway+カスタムLambdaオーソライザーはいずれも別インフラ構築が必要で運用負荷増（罠） → [bedrock_agents.md](../topics/bedrock_agents.md)
+- **MCPサーバーをLambdaで本番公開する時の認証の選び分け**（呼び出す相手が誰かで決まる）：
+  - 呼ぶのが**AWSアカウントを持つアプリ/サービス**（自社の別アプリ・IAMロールを渡せるサードパーティ＝クロスアカウントロール）→ **Lambda関数URL(Streamable HTTP)＋IAM認証(SigV4)**。API Gateway等の追加インフラ不要で運用負荷最小。「厳格な認証＋運用負荷最小＋MCP標準トランスポート維持」の3点が揃ったらこれ
+  - 呼ぶのが**ログインする人間のエンドユーザー**（ID/パスワードでサインインする一般利用者）→ **API Gateway＋Cognito(OAuth)**。ただし追加2サービス分の運用増を伴うので「運用負荷最小」が最優先なら負ける
+  - **APIキーは「厳格な認証」に不足**（アクセス制限するだけで呼び出し元の身元を検証しない）／Lambda Invoke API直接呼び出しはカスタムトランスポート自作でMCP標準を外れる（どちらも罠）
 - マルチターン文脈維持：エージェントなら **sessionId**（追加実装不要）/ 自前FM呼び出しなら messages[]自己管理 or DynamoDB
 - Step Functions **Standard vs Express**：人間の応答待ち・承認・数時間処理・監査証跡・重複不可 → **Standard** / 高頻度・短時間・低コスト → **Express**（5分制限。処理内容から常識判断、問題文に明記なくてもよい）
 - 「S3+Lambda+Step Functions Standard(Bedrockオーケストレーション)+DynamoDB」型の構成では、**監査証跡＝Standardの実行履歴（最大**90日間**、Step Functionsサービス自体がAPI取得可能な形で保持。※最大実行"時間"の1年とは別軸なので混同しない）が担当**、**DynamoDB＝処理ステータス/結果への高速アクセスが担当**（役割が違う。「DynamoDBに書いてあるから監査証跡」と混同しない）
@@ -123,6 +130,7 @@
 - Lambda関数の自己再帰呼び出しでループを実装する設計は**約16回で自動停止**（Lambdaの再帰ループ検出。SQS/S3/SNS/Lambda相互呼び出しが対象）。意図的な多段反復ループの実装には不向きで、グラフィカルな実行確認手段もない → [orchestration.md](../topics/orchestration.md)
 - 人間レビューの承認ワークフロー → **Step Functions + waitForTaskToken**（外部完了待ち→ `SendTaskSuccess` で再開。ポーリングは不正解）
 - 「順次実行＋エラー時フォールバック・運用負荷最小」→ **Step Functions（ASL宣言的）**。Lambda自前実装は引っかけ
+- 「複数Bedrockエージェント＋Lambdaを順次実行＋グレースフルデグラデーション」→ **各エージェント/Lambdaを個別のTaskステートにし、タスクごとにRetry/Catch**。1タスクにLambdaでまとめて丸投げ（粒度が粗い）・Lambda自前オーケストレーション（待機中も課金・状態管理を自作）はいずれも不正解。Step FunctionsはBedrock Agentsの`InvokeAgent`とネイティブ統合済み → [orchestration.md](../topics/orchestration.md)
 - 「種類の違う処理を同時実行して全部待つ」→ **Parallel** /「可変個数に同じ処理」→ **Map**
 - 「自動化インシデント対応」（複数ステップ・分岐・承認待ち）→ **Step Functions** /「単純通知だけ」→ **SNS**
 - Bedrock Flows のプロンプトノードには **プロンプト管理テンプレート + ガードレール**を関連付け可（エージェント組み込みは「エージェントノード」）
@@ -151,7 +159,7 @@
 - 「**プロンプトリーケージ**（システムプロンプトを抜き出す攻撃）」検知が要件に出たら → ガードレールは**Standardティア一択**（Classicティアはプロンプトリーケージ検出非対応）。プロンプトインジェクション・ジェイルブレイクだけならどちらのティアでも検出可
 - 「InvokeModel APIでプロンプト攻撃フィルターを使う」→ ユーザー入力を`<amazon-bedrock-guardrails-guardContent_{ランダムサフィックス}>`タグで**必ず**囲む（タグなしだとフィルタが機能しない）。固定サフィックスは予測されてタグ閉じ攻撃を許すため不正解。Converse/ConverseStream APIはタグ付け不要
 - AWS WAF（HTTPレイヤの文字列/サイズマッチ）・Comprehend有害コンテンツ検出（ヘイト/嫌がらせ等のカテゴリスコア）はいずれも**プロンプト攻撃・プロンプトリーケージの意味的検出はできない**（正常なHTTPリクエスト・非有害な文面に見えるため）。この手の攻撃対策は常にGuardrailsのプロンプト攻撃フィルター一択
-- Macie / GuardDuty はセキュリティ監視であってコンテンツモデレーションではない（引っかけ）
+- Macie / GuardDuty はセキュリティ監視であってコンテンツモデレーション（生成AI出力の有害表現フィルタ等）ではない（引っかけ）。**このルールは「コンテンツモデレーション文脈」限定**——問題文が文字通り「データ分類」「機密データの自動検出」を求めている場合はMacieの中核機能そのものなので正解になる（Macie＝罠と機械的に即除外しない、Udemy問10）
 - **S3のPII検出・コンプライアンスレポート** → **Macie**（継続的自動検出） + Comprehend（テキスト内PII API）+ EventBridge + Lambda（自動修復）
 - 「推論前後のPIIマスク＋保持期限の強制」→ **Bedrockガードレール（推論前後でPIIマスク）+ Macie（S3保存データの機密情報検出）+ S3ライフサイクルポリシーのExpirationアクション**。ライフサイクルの「アーカイブストレージへの移行」はTransitionでありデータは削除されない＝保持要件を満たさない罠。ライフサイクルルールはバケットポリシーのdenyより優先実行される → [security_governance.md](../topics/security_governance.md)
 - Macie の「機密データの自動検出」= 常時監視。週次・月次の検出ジョブより「自動修復・継続監視」要件に合う
@@ -198,6 +206,7 @@
 ## 評価・モニタリング・オブザーバビリティ
 
 - RAG 評価：取得のみ → **retrieve-only** / 取得+生成の総合（本番前）→ **retrieve-and-generate**
+- 「複数チャンク化戦略の比較＋複数FMの生成品質評価＋デプロイ品質しきい値」→ **retrieve-and-generateジョブ1本＋カスタムメトリクス（1〜5等の`ratingScale`自由設定・最大10個）+ LLM-as-a-judge**。組み込みメトリクスは常に0〜1正規化。KBは1ジョブ1つ制限なので複数戦略比較には**BYOI（`precomputedRagSourceConfig`＋`knowledgeBaseIdentifier`ごと格納）**が必要。retrieve-onlyのみ・戦略ごとに評価ジョブ分離・手動レビュー依存はいずれも不正解（自動しきい値適用や単一ジョブでの一貫比較ができない） → [model_evaluation.md](../topics/model_evaluation.md)
 - 自動採点 → **LLM-as-a-judge**。モデル自身の自己採点は自己バイアスで客観性ゼロ → 規制業界で不適切
 - CloudWatch Synthetics は外形監視（合成ユーザーの定期実行）。LLM出力の品質評価には使わない
 - 「基準値が自動更新」→ **CloudWatch 異常検出アラーム**（固定しきい値・Contributor Insights は自動更新不可）

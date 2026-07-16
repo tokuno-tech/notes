@@ -104,6 +104,20 @@ Lambda response streaming の代表的な呼び出し口：
 
 試験・設計でまず押さえる軸は「HTTP のチャンク転送が必要なのか」「WebSocket のメッセージプッシュでよいのか」。API Gateway の細かい対応可否は更新されやすいため、最新ドキュメント確認対象。
 
+### API Gateway REST API のレスポンスストリーミング（2025-11〜対応、公式ドキュメント確認済み）
+
+```
+REST API のプロキシ統合（AWS_PROXY = Lambda proxy統合 / HTTP_PROXY）で
+「レスポンス転送モード」を BUFFERED（デフォルト）→ STREAM に変更すると：
+  → Lambda等の統合レスポンスの計算完了を待たず、逐次クライアントへ配信
+  → TTFB（最初のバイトまでの時間）を短縮
+```
+
+- 対象は**REST APIのみ**（**HTTP APIは非対応のまま**）。プロキシ統合以外（VTLでのレスポンス変換等）ともSTREAM設定は併用不可
+- ストリーミング時間は最大**15分**。10MBペイロード上限・29秒統合タイムアウトも回避できる（アイドルタイムアウトはリージョナル/プライベートで5分、エッジ最適化で30秒）
+- 併用不可な機能：エンドポイントキャッシュ・コンテンツエンコーディング・VTLレスポンス変換
+- ストリーミング利用には追加コストが発生する
+
 ### WebSocket API はストリーミングとは別概念
 
 ```
@@ -158,7 +172,8 @@ Lambda 関数 URL（Function URL）：
 | 構成 | ストリーミング | サービス数 | 運用負荷 |
 |---|---|---|---|
 | **Lambda Function URL + RESPONSE_STREAM** | ✅ ネイティブ | 2 | 最小 |
-| API Gateway proxy integration + Lambda | △ 対応可否・制約を公式確認 | 2 | 中 |
+| **API Gateway REST API + Lambda proxy統合（STREAM転送モード）** | ✅ ネイティブ（2025-11〜） | 2 | 最小〜中（API Gatewayの追加コスト・機能制約あり） |
+| API Gateway HTTP API + Lambda | ❌ 非対応 | 2 | ― |
 | API Gateway WebSocket + Lambda | △ メッセージベース | 2〜4 | 高（接続管理要） |
 | CloudFront + Lambda Function URL | ✅ | 3 | 中（WAF等必要な場合） |
 
