@@ -86,6 +86,7 @@
 - Kendra の関連性スコアは検索の確信度であって評価メトリクスではない
 - 「複数の多様なドキュメントソースを統合＋一貫したアクセスパターン＋運用負荷最小」→ **Bedrock ナレッジベース + 標準データソースコネクタ + 自動同期**。「自動同期」＝トリガー自体が自動という意味ではなく、差分検出/認証/フォーマット標準化がコネクタ内蔵という意味。Kendra+カスタムコネクタ+EventBridge(増分)+Glue ETL(標準化) は一見具体的でも自作コンポーネント3点盛りで運用負荷増（罠）
 - 選択肢の **Elasticsearch はベクトル非対応で即脱落** / **Comprehend がクエリ理解・拡張の選択肢なら不正解**（構文レベル止まり）
+- **OpenSearch Serverlessの403エラー**：IAM権限は`aoss:`プレフィックス（`es:ESHttp*`はマネージドドメイン用で無効）。データプレーンアクセスは`aoss:APIAccessAll`+`aoss:DashboardsAccessAll`の**2つセット必須**＋**データアクセスポリシー（IAMとは別体系、`Resource`にワイルドカードでパターン自動適用可）**の両方が要る。同期成功済みならネットワーク（VPCエンドポイント）は原因から除外 → [bedrock_rag.md](../topics/bedrock_rag.md)
 - 「OpenSearch への取り込み」→ **OpenSearch Ingestion** /「汎用ETL・増分」→ **Glue** /「品質・GUI変換」→ **Glue DataBrew**
 
 ## Knowledge Base 運用
@@ -98,15 +99,19 @@
 - ソース帰属（citations）は RetrieveAndGenerate / Converse で**自動付与**（別途記録コード不要）
 - KB サポート形式 = **PDF/MD/TXT/DOC/DOCX/HTML/CSV/XLS/XLSX**、**1ファイル50MB上限**（画像はJPEG/PNG 3.75MB）。取り込みエラー＝大PDFがサイズ超過 → **大きなドキュメントを分割**（形式変換/S3圧縮/タイムアウト延長は無関係。PDFはネイティブ対応・タイムアウトは設定不可）
 - 「古いドキュメントを無視/最新のみ参照させる」→ **メタデータフィルター（modification_time系フィールドで greaterThan 等）** が正解。プロンプトテンプレート＝モデルの応答制御であり検索対象の絞り込みは不可、セマンティック検索単体も新しさでは絞れない
+- 「S3更新を即時検知してKB同期・手動起動不要・変更分だけ再処理」→ **S3→EventBridge通知（デフォルト無効・要明示有効化）→Lambda→StartIngestionJob**。KBの同期自体はインクリメンタル（差分のみ再処理）なので追加実装不要。**S3のEventBridgeイベントに「更新専用」種別は存在しない**（`PutObject`上書きも「オブジェクト作成」イベントとして配信、`reason`フィールドで区別）——存在しないイベント種別を前提にした選択肢は不正解。日次スケジュール実行は最大24時間遅延で即時性要件に反し、DynamoDB Streams経由は S3変更を直接検知できず二段階書き込みの整合性リスクがあり不正解 → [bedrock_rag.md](../topics/bedrock_rag.md)
 
 ## Agents・MCP・Bedrock Flows・オーケストレーション
 
 - **Bedrock 単体は Lambda を呼べない**（受動的API）。Lambda を呼ぶのは **Agents の Action Group** か Strands 等のコード側ループ
 - 「複数ステップ・推論・複雑なタスク」→ **エージェント基盤（Strands / Bedrock Agents）**。「Lambda + Bedrock」は基本統合で不正解側
 - 「ノーコード・FM呼び出しをノードでつなぐ」「CoTテンプレ・推論ステップ管理」→ **Bedrock Flows** /「自律的にツール選択」→ **Agents**
+- 「本番トラフィックでエージェントのゴール達成率・ツール選択妥当性をリアルタイム継続評価、フルマネージド」→ **Bedrock AgentCore Evaluations（オンライン評価）**（組み込み評価子`Builtin.GoalSuccessRate`/`Builtin.ToolSelectionAccuracy`、LLM-as-a-Judge）。**CreateEvaluationJob（`applicationType`はModelEvaluation/RagEvaluationの2値のみ）はエージェントのマルチステップトレース評価に非対応**、CloudWatchのAgentsランタイムメトリクス（呼び出し数・処理時間等）はセマンティック品質を測れず、SageMaker Clarifyは特徴量帰属/バイアス分析が主目的でエージェント評価は設計対象外 → [bedrock_agents.md](../topics/bedrock_agents.md)
 - 「疎結合」「動的ツール選択」→ **Strands + MCP**（Step Functions/Flows は密結合・固定パス）
 - MCP：「複数FMで標準化されたツール接続」「FMを変えても接続を変えたくない」「運用負荷最小」→ **MCP**（相互運用性）
 - Agents 構築：マネージドで素早く → **Bedrock Agents** / コードで細かく・マルチプロバイダ → **Strands** / 専門エージェント振り分け → **Agent Squad**
+- 「調査→要約→レポート作成のような**逐次マルチエージェント連携**＋推論ループ/ツール呼び出し/コンテキスト引き渡しを**自前実装せず**カスタムオーケストレーションコード最小化」→ **Strands Agents SDK（Workflowパターン）**。**「コード最小限」＝「コードを一切書かない」ではなく「エージェント間の配線ロジック（推論ループ・コンテキスト受け渡し）を自作しない」の意味**——この軸を取り違えると、Step Functions（宣言的で書く量は少なく見えるが、LLM主導の推論ループ・ツール選択・コンテキスト管理はLambda内に結局手書きが必要）やECS/Lambda+SQSのような自前疎結合構成（配線ロジック全部自作）を誤って選びやすい。SwarmとGraphは他のマルチエージェント形状（対等協調・分岐合流）向けで今回は該当しない → [bedrock_agents.md](../topics/bedrock_agents.md)
+- 「**Strands Agents SDK**でツール定義」→ Python関数に**`@tool`デコレータ**（OpenAPIスキーマ/アクショングループはBedrock Agents側の話で製品レイヤーが違うため即不正解）。**Strands SDKにパラメータ自動検証機構は無く**、検証・例外処理はツール関数内に自前実装するのが開発者の責務。ツール実行環境の分離は明示的にLambda/EC2/Fargate等へ配置（オーケストレーションループとは別実行環境）。Step FunctionsはStrandsのモデル駆動ループ自体の代替にはならない（上位ワークフローの1ステップとして呼ぶのはOK） → [bedrock_agents.md](../topics/bedrock_agents.md)
 - AgentCore：既存Pythonをデプロイ・インフラ最小 → **Runtime** / HTTPサーバ自動管理 → **SDK(@app.entrypoint)** / コンテナ化自動 → **スターターツールキット**
 - レガシーAPI統合＋「複数エージェントで再利用」「運用負荷最小」→ **MCPサーバー（関数呼び出しスキーマ）＋AgentCore**／REST変換・プロキシ層は見た目の標準化のみで関数呼び出しの抽象化・再利用機構がなく不正解／エージェントごとのサイドカーミドルウェアは重複デプロイでスケールせず不正解
 - 「AgentCore Runtime/Gatewayを企業IdP(Entra ID等)のOIDCで認証・運用負荷最小」→ **AgentCore Identityをインバウンドプロバイダーとして直接設定**（ディスカバリーURL＋許可オーディエンス(aud)の2項目だけで完結）。Cognitoユーザープール経由・IAM Identity Center経由・API Gateway+カスタムLambdaオーソライザーはいずれも別インフラ構築が必要で運用負荷増（罠） → [bedrock_agents.md](../topics/bedrock_agents.md)
@@ -122,9 +127,12 @@
 - 「自動化インシデント対応」（複数ステップ・分岐・承認待ち）→ **Step Functions** /「単純通知だけ」→ **SNS**
 - Bedrock Flows のプロンプトノードには **プロンプト管理テンプレート + ガードレール**を関連付け可（エージェント組み込みは「エージェントノード」）
 - 「複数LLM呼び出しをチェイニング＋プロンプトのバージョン管理／ロールバック＋開発労力最小」→ **Prompt Management＋Flows**。Step Functionsは自前でタスク関数を書いてLLM呼び出しを実装する必要があり開発工数増（罠）
+- 「単純ルーティングは最小レイテンシ＋複雑ルーティングはFM選択前に分析＋詳細な実行履歴＋プライマリFM障害時フォールバック」→ **ハイブリッド設計**（単純判定はアプリケーションコード直書き／複雑判定はStep Functions Standard＋JSONata＋InvokeModel）。**Retry/Catch＝フォールバックの宣言的実装**。全部Lambda・全部SQS・コンテンツタイプ別Step Functions分割はいずれも単純ルーティング側のレイテンシ要件で脱落 → [orchestration.md](../topics/orchestration.md)
+- **「インテリジェントプロンプトルーティング」は名前に釣られるな**：振り分け対象は**プロンプトではなくモデル**（同一モデルファミリー内でリクエストを品質/コストで動的振り分け）。プロンプトのバージョン管理・バリアント比較・監査証跡が要件なら無関係（→ Prompt Management + Flows）
 
 ## ガードレール・コンテンツ安全性
 
+- **ガードレールの強度設定はカテゴリ別（Hate/Insults/Sexual/Violence/Misconduct/Prompt Attack）のNONE/LOW/MEDIUM/HIGHの4段階のみ**。「オーディエンスベースの閾値チューニング」のような造語・存在しない機能名に注意——表現が専門的・説明的に見えても実在するAPI/設定項目かを確認する。一度選んだ正答（シンプルな構成）を、後から出てきた「詳しそうな」表現の選択肢に釣られて差し替えない
 - 「過剰ブロックを避けつつUX維持」→ コンテンツフィルター強度は**中**
 - PII フィルター：入力は **BLOCK**（モデルに渡さない）、出力は **MASK**（伏せて返す）。入出力で別アクション可。「PII入力を止めたい」は MASK でなく **BLOCK**
 - 「検知・記録はするが配信は止めない」→ **検出モード**（ブロックモードは配信を止める）
@@ -179,6 +187,7 @@
 - 「類似入力のわずかな変化に対する応答の感度・一貫性を定量評価」→ **Bedrockモデル評価ジョブ（Robustness/堅牢性メトリクス）**。**レーベンシュタイン距離（編集距離）でLambda自作**は文字列の表層比較のみでセマンティック一貫性を測れず不正解筋（Temperature=0はランダム性を減らすだけで一貫性の「測定」にはならない点も引っかけ）。埋め込み距離分析（KB+Titan Embeddings）はセマンティックだが体系的な評価フレームワークにならず不十分／エージェントは評価メトリクスを持たない
 - SageMaker Clarify = 伝統的 ML のバイアス検出 → LLM のプロンプトバリアントテスト・セカンダリモデル検証には不向き（ただしBedrockではなく**SageMaker AI/JumpStartでホストした生成モデル**なら話が別、次項参照）
 - 「**SageMaker AI**でホストしたGenAIモデル＋社会経済/年齢/地域等**複数属性軸にまたがる微妙なバイアス検出**＋運用負荷最小」→ **Clarify(FMEval)のプロンプトステレオタイプ評価＋組み込み`CrowS-Pairs`データセット**が正解。対象がBedrock FMの場合はClarifyのネイティブ統合がなくSageMaker Processing+カスタムコードが必要になる点との混同注意。Model Monitorのバイアスドリフト（表形式前提）やカスタム評価データセット自作は運用負荷増で不正解 → [model_evaluation.md](../topics/model_evaluation.md)
+- 「**Bedrock GenAIアプリ**でデモグラフィック間の公平性を継続監視＋閾値アラート＋週次レポート＋カスタム開発最小」→ **Clarifyのバイアスドリフトモニタリング**（`bias_metric_CI`等をCloudWatchへ自動発行、`aws/sagemaker/Endpoints/bias-metrics`ネームスペース）が消去法的な正解。ただしBedrockとの直接統合はなく推論ログの変換作業が必要（Lambda完全自作よりマシ、という相対評価）。Guardrailsのコンテンツフィルター/`InvocationsIntervened`は統計的公平性を測れず、Bedrockモデル評価ジョブは一回限りのバッチで継続監視に非対応 → [model_evaluation.md](../topics/model_evaluation.md)
 - 「バイアスの継続的モニタリング＋アラート」→ **CloudWatch カスタムメトリクス**（デフォルト機能ではなくカスタム。バイアス数値を自前プッシュ）
 - 「制御されたプロンプトバリアントテスト」→ **Bedrock Prompt Management**
 - 「**体系的な**評価フレームワーク」でFM選定（AIP-5.1）→ **カスタムデータセット + 複数メトリクス（トークン効率・レイテンシ・ビジネス成果）+ 統計的有意差検証** の3点セットが揃う選択肢。systematic = 網羅性（観点を偏らせない）＋ 客観的に繰り返せる仕組み。「〜のみ」「デフォルトデータセット」「統計検証なし」は脱落
@@ -220,8 +229,9 @@
 - 品質ゲートの指標は「**出力品質を直接測るもの**」（例: ハルシネーション率）。**モデル特性（ファイルサイズ・パラメータ数・トレーニングデータ量）は品質ゲートにならない**（デプロイの安全性を示さない）
 - 「**FM出力品質の包括的評価メトリクス**」→ **関連性・事実の正確性・一貫性・流暢性**（従来MLのaccuracy/F1では不十分）。ダミー3種＝①インフラ指標（CPU/メモリ/応答時間）②運用指標（APIコール数/エラー率/トークン数）③モデル特性（サイズ/パラメータ数/学習データ量）。いずれも出力品質を測らない
 
-## AIサービス（Transcribe / Textract / Rekognition / Comprehend / Q）
+## AIサービス（Transcribe / Textract / Rekognition / Comprehend / Q / Lex）
 
+- 「既存Lex V2のインテント認識・スロット抽出を維持しつつFM応答生成だけ追加・再設計コスト最小」→ **Lex V2フルフィルメントLambda内からBedrock InvokeModelを呼ぶ**。Assisted NLU（入力理解の精度向上機能で応答生成は不可）・Knowledge Basesの直接統合（ネイティブ統合が存在せず結局Lambda経由が必要）・Bedrock Agentsへの全面移行（既存資産を作り直しで再設計コスト増）はいずれも不正解 → [ai_services.md](../topics/ai_services.md)
 - 「発話完了前から解析」→ **Transcribe Streaming + Partial Results**（Batch はリアルタイム不可）
 - 「コールセンター・通話分析・感情」→ **Transcribe Call Analytics** / Connect 通話に追加実装なし → **Contact Lens**
 - 「専門用語の音声認識精度」→ **Custom Vocabulary** /「分野固有語・業界用語」→ **カスタム言語モデル** /「言語自動判定」→ バッチ言語識別
@@ -280,6 +290,7 @@
 
 ## ガバナンス・IAM・コンプライアンス・データ保護
 
+- 「S3/OpenSearch ServiceをCMKで保存時暗号化＋**漏れなく強制**」→ **S3デフォルト暗号化(SSE-KMS)だけでは不十分**（PutObjectで別方式を明示指定されると回避される）。**バケットポリシーで条件キー(`s3:x-amz-server-side-encryption-aws-kms-key-id`等)を使い指定CMK以外のPutObjectをDeny**して初めて強制になる。S3 SSE-KMS・OpenSearch Service保存時暗号化は**対称型CMKのみ対応**（非対称キーは署名/TLS用途で不可）→ [security_governance.md](../topics/security_governance.md)
 - M2M（サービス間）認証 → **IAM ロール + SigV4**（改ざん検知可）。Cognito は人間のユーザー向け（JWT/OAuth）
 - 認証主体の識別：社員・内部ユーザー → **IAM Identity Center** / アプリユーザー・顧客 → **Cognito**
 - 「AD/Entra ID連携＋マルチアカウント＋部門ベースアクセス＋リージョン耐障害性＋運用負荷最小」→ **IAM Identity Center**（許可セットで複数アカウントに一括配布、AWS公式ベストプラクティスが名指しで推奨）。Cognitoは顧客向けCIAMで複数アカウント一元管理の仕組みを持たない／各アカウントで個別にSAML設定（IAMのSAMLプロバイダー）はアカウント数に比例して運用負荷増／IAMユーザーをAD名にミラーリングは長期認証情報＝フェデレーション未使用で即アウト → [security_governance.md](../topics/security_governance.md)
@@ -360,7 +371,9 @@
 ## モデル選択・ファインチューニング
 
 - 「コスト効率よくドメイン特化」→ **LoRA / PEFT** /「最高精度・コスト度外視」→ **Full Fine-tuning** /「モデルを変えたくない」→ **RAG / プロンプトエンジニアリング**
+- 「単一SageMakerエンドポイント＋複数部門のLoRAアダプタ＋ベース重み共有＋無停止で追加/更新/削除」→ **SageMaker adapter inference component**（base inference componentにベースを1回ロード、アダプタはS3 URI+紐付け先名だけで作成、ComputeResourceRequirements不要）。**MME（Multi-Model Endpoints）はモデルアーティファクトがフルモデルでベース重複するため不正解**、**Bedrockモデルカスタマイズは訓練ジョブ経由でプロビジョンドスループットが部門ごとに必要**になり無停止切替にならず不正解、部門ごとに専用エンドポイントを作る案も単一エンドポイント要件に反し不正解 → [sagemaker_mlops.md](../topics/sagemaker_mlops.md)
 - 「指示追従の改善」→ インストラクションチューニング /「ラベルなし大量データでドメイン知識・専門用語の追加」→ 継続事前学習（※現行の`custom-models.html`にはSupervised fine-tuning/Reinforcement fine-tuning/Distillationの3つしか載っておらず「継続事前学習」項目が見当たらない。判断ルールとしては使えるが、Bedrockの現行提供状況は要注意）
+- **継続事前学習（CPT）はTitan Textモデルのみ対象**。専門用語・語彙は学習できても「毎月改定される事実情報（具体的な算定数値等）を推論時に正確参照」はできない。「ラベル付きQ&Aなし＋数百件の文書＋毎月更新＋再学習コスト最小」→ **RAG（Bedrock Knowledge Bases）一択**。CPT/ファインチューニングの毎月再実行はどちらも再学習タイムラグ＋コストで不正解
 - Nova Micro = テキスト専用（画像・動画不可）
 - 「汎用埋め込み」が不正解な理由 = パラメータ調整の余地がなくAWS統合・スケールもない（Titan Embeddings V2 はFT非対応）
 - 「ファインチューニング用データセットのリネージュ追跡＋変換過程の記録＋承認済みデータのみ使用・運用負荷最小」→ **S3(raw)+Glueクローラー+Glue Data Catalog+Glue ETL(Converse API JSONL変換)+S3(curated)** が正解。EMR+Spark＝クラスタノードを自前で用意・管理しリネージュ機能も組み込みでは無い、Athena＝SQLエンジンで非構造化テキストの変換に不向き、raw データを変換なしで直接参照＝ガバナンス/変換記録が存在せず不正解

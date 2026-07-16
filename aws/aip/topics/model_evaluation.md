@@ -585,6 +585,30 @@ Bedrock ネイティブ機能（モデル評価ジョブ）を使えば
 - **仕組み**：ステレオタイプ的な文とその逆（反ステレオタイプ的）の文のペアをモデルに提示し、どちらに高い確率を割り当てるかを比較。`Is_biased`メトリクス（0=バイアスなし方向、0.5=中立、1=常にステレオタイプ文を優先）で数値化
 - **判断軸**：「社会経済グループ・年齢層・地域など複数属性にまたがる微妙なバイアスをSageMaker AIベースのGenAIアプリで検出したい＋運用負荷最小」→ **Clarify(FMEval)のプロンプトステレオタイプ評価＋CrowS-Pairs**が正解。Model Monitorのバイアスドリフト（表形式データ前提）や自前のカスタム評価データセット構築より運用負荷が小さい
 
+### バイアスドリフトモニタリング（ModelBiasModelMonitor）（公式確認済み）
+
+FMEvalとは別のClarify機能。**本番稼働中のモデル**に対して、デモグラフィックグループ間の統計的な不均衡を継続的に検出する。
+
+```
+モニタリング対象：SageMakerリアルタイムエンドポイント（EndpointInput）
+             または バッチ変換ジョブ（BatchTransformInput）
+             ※Bedrockエンドポイントへの直接統合は公式には無い
+               （Bedrockが対象の場合、推論ログをSageMaker Model Monitor互換の
+                 データキャプチャ形式に整形してS3に配置する変換作業が必要）
+
+動作：スケジュール実行（最短1時間間隔のcron）＝ 近リアルタイムの継続監視
+      （厳密なリアルタイム監視ではない点に注意）
+```
+
+**CloudWatchへの発行内容**：
+- ネームスペース：リアルタイムエンドポイント＝`aws/sagemaker/Endpoints/bias-metrics`／バッチ変換＝`aws/sagemaker/ModelMonitoring/bias-metrics`
+- メトリクス名：`bias_metric_` + 略称（例：`bias_metric_CI`・`bias_metric_DPL`・`bias_metric_JS`）
+- ディメンション：`Endpoint`・`MonitoringSchedule`・`BiasStage`（Pre-training/Post-Training）・`Label`・`LabelValue`・`Facet`・`FacetValue`
+
+→ CloudWatchアラームで閾値（例：15%）を設定すれば不一致検知の自動通知、ダッシュボードで週次比較レポートも構築できる
+
+**Bedrock対象での位置づけ**：Bedrock GenAIアプリの継続的な公平性監視というシナリオでは、Bedrockとの直接統合がない制約は残るが、**Lambdaで公平性分析ロジックを完全に自作するより開発労力が少ない**という相対評価で選ばれる（消去法的な「最小」であり、ネイティブ統合ではない点は要注意）
+
 ---
 
 ---

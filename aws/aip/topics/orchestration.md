@@ -162,6 +162,39 @@ Lambda を介さずに AWS API を**直接**呼び出せる。
 
 ---
 
+### Retry / Catch によるフォールバック（Udemy問6）
+
+Step Functions のタスク状態には `Retry`（再試行）と `Catch`（エラー捕捉）を宣言的に定義できる。
+
+- **Retry**：指定エラー（`States.Timeout`・`Bedrock.ThrottlingException`等）に対し、最大試行回数・初期インターバル・バックオフレートを設定して自動再試行。一時的な障害（スロットリング・接続タイムアウト）向け
+- **Catch**：Retryで解決できない障害を捕捉し、別の状態（代替FMを呼ぶ状態など）へ制御を移す。**プライマリFM障害時に代替FMへフォールバックする処理をカスタムコードなしでワークフロー定義として構造化できる**
+- どちらも実行履歴に記録されるため、フォールバック発生の有無・原因もStandardワークフローの実行履歴からそのまま確認できる
+
+→ 「プライマリFM障害時の自動フォールバック」「詳細な実行履歴」の複合要件が出たら、Lambda自前実装やSQS経由のリトライではなく **Step Functions StandardのRetry/Catch** が正解筋。
+
+### JSONata（2024年11月〜対応）
+
+Step Functionsは従来のJSONPathベース5フィールド（InputPath/Parameters/ResultSelector/ResultPath/OutputPath）に加え、`QueryLanguage: JSONata` を指定するとJSONataによるデータ変換が使える。
+
+- `Arguments`（タスクへの入力）と `Output`（状態の出力）の2フィールドで記述。式は `{% expression %}` で埋め込む
+- Lambda関数を介さずにJSON抽出・フィルタリング・変換ロジックをステートマシン内で完結できる
+- Choice状態でJSONata条件式を使えば、コンテンツのセマンティクス分析結果に基づく動的なFMルーティングをワークフローとして表現できる
+
+### ハイブリッドルーティング設計（Udemy問6）
+
+処理コスト・複雑さが異なる複数種のルーティングを単一メカニズムで処理するのは非効率。
+
+```
+シンプルな判定（ファイル拡張子等の文字列マッチ）
+  → アプリケーションコードで直接処理（サービス呼び出しオーバーヘッドなし＝最小レイテンシ）
+
+複雑な判定（コンテンツのセマンティクス分析が必要）
+  → Step Functions（Standard）+ JSONata + InvokeModel で構造化
+  → 実行履歴・Retry/Catchによるフォールバックも同時に得られる
+```
+
+「低レイテンシの単純ルーティング」と「複雑な分析ルーティング＋履歴＋フォールバック」が両方要件に出たら、**どちらか一方の仕組みに寄せず、アプリケーションコード＋Step Functionsのハイブリッド**が正解になりやすい。全ルーティングをLambda単体・SQS経由・コンテンツタイプ別Step Functions分割にすると、単純ルーティング側のレイテンシ要件を満たせず不正解になりやすい。
+
 ### Amazon States Language（ASL）と Choice ステート（AIP-類似問題で頻出）
 
 **ASL**：Step Functionsのワークフローを記述するJSON形式の言語。ループ・分岐・並列処理などの実行フローを**宣言的に**定義する。

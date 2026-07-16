@@ -235,6 +235,10 @@ Kubernetesの監視ではデファクトスタンダード。
 
 ## インフラ・コンテナ監視
 
+### RDS/DocumentDB Enhanced Monitoring
+
+**データベース（RDS・DocumentDB等）専用の監視機能。** OSレベルの詳細メトリクス（CPU・メモリ・ファイルシステム・プロセスごとのリソース使用状況等）を数秒間隔で取得できる。コンテンツモデレーションやアプリケーション層のフィルタリングとは無関係。
+
 ### CloudWatch Application Insights（AIP-68）
 
 - **対象**: EC2上で動作するアプリケーション（.NET、Java、SQL Server等）

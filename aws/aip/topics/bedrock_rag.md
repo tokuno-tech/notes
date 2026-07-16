@@ -107,6 +107,16 @@ OpenSearch Serverless（ベクトル + メタデータ）
 | 低レイテンシ | HNSW + OCU自動スケール |
 | RAGパイプライン構築 | Bedrock Knowledge Bases が同期〜回答生成まで一貫提供 |
 
+### OpenSearch Serverless のアクセス制御（Udemy問8）
+
+OpenSearch Serverlessは従来のOpenSearch Service（マネージドドメイン）とは別のアクセス制御モデルを持つ。暗号化ポリシー・ネットワークポリシー・データアクセスポリシーの3種類で構成される。
+
+- **IAM権限は `aoss:` プレフィックス**。`es:ESHttp*`（マネージドドメイン用）はServerlessには一切適用されない
+- データプレーンアクセスには **`aoss:APIAccessAll` と `aoss:DashboardsAccessAll` の2権限がセットで必須**（どちらか一方でも欠けると403 Forbidden）
+- **データアクセスポリシーはIAMポリシーとは論理的に別体系**。IAMがコレクション作成等の管理APIを制御するのに対し、データアクセスポリシーはドキュメントの読み書き等のデータ操作を制御する
+- データアクセスポリシーの `Resource` にはワイルドカード（例: `collection/finance-*`）でパターン指定可能。新規コレクション・インデックス追加時も自動でポリシーが適用され、手動更新が不要（大規模コレクション管理向け）
+- Bedrockナレッジベース経由でLambda等から呼び出す場合、**Lambda実行ロールにも `bedrock:InvokeAgent`（BedrockAgentRuntime API呼び出し用）+ 上記aoss権限2つ + データアクセスポリシーへの登録**が必要。同期成功＝ネットワーク到達性は確立済みという意味で、403エラーはVPC設定ではなくIAM/データアクセスポリシー層の不足を疑う
+
 ### OpenSearch Serverless の料金モデル
 
 - **OCU（OpenSearch Compute Units）単位**で課金
@@ -176,6 +186,24 @@ S3 のドキュメント（PDF / Word / HTML / CSV など）
 - **フォーマット標準化もコネクタ内蔵**：PDF/Word/HTML/CSV等を個別のETLなしで取り込める
 
 → 「自動」＝トリガーが自動という意味ではなく、**トリガーした後の差分判定・パース・認証がマネージドで完結している**という意味。試験で「増分同期をEventBridge/Glueで明示構築」という選択肢が出たら、それはKnowledge Basesが内蔵している機能を自作で再実装しているだけ＝運用負荷増、と読む。
+
+### S3更新をトリガーに即時同期する構成（EventBridge + Lambda + StartIngestionJob）
+
+「S3の更新を検知して即座に同期を開始したい」場合の定番構成：
+
+```
+S3バケットでEventBridge通知を有効化（デフォルトは無効。明示的な有効化が必要）
+  ↓ オブジェクト作成イベント（Object Created）を配信
+EventBridgeルールでイベントを受信
+  ↓
+Lambda関数がトリガーされ、StartIngestionJob APIを呼んで同期ジョブを開始
+  ↓
+KB側のインクリメンタル同期により、変更のあったドキュメントだけが再処理される
+```
+
+- **S3のEventBridgeイベントに「更新専用（Object Updated）」という独立した種別は存在しない**。既存ファイルへの`PutObject`上書きも**オブジェクト作成イベント（Object Created）として配信される**（`PutObject`・`POST Object`・`CopyObject`・`CompleteMultipartUpload`がすべて対象）。操作の種別はイベント内の`reason`フィールドで識別できる
+- 「新規作成と上書き更新を区別する専用イベント種別」を前提にした選択肢は、そのイベント種別自体が存在しないため成立しない
+- S3→EventBridgeの通知はバケットごとに**デフォルト無効**。コンソールまたはAPIで明示的に有効化する必要がある
 
 ### サポートするドキュメント形式とファイルサイズクォータ（Domain 5 ボーナス3）
 
