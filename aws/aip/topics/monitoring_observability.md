@@ -563,8 +563,14 @@ Bedrock Agent（enableTrace: true）
 | リクエスト単位の詳細分析・柔軟なクエリ | **CW Logs Insights** | ログを SQL ライクにクエリ、ダッシュボードにログウィジェット追加可能 |
 | リアルタイム集計 + 閾値アラーム | **CW ネイティブメトリクス** | InputTokenCount / OutputTokenCount 等が自動発行、CW Alarm で閾値通知 |
 | 分散トレーシング（サービス間レイテンシー把握） | X-Ray | ❌ トークン集計・アラームには不向き |
-| バッチ分析・可視化ダッシュボード | Athena + QuickSight | ❌ バッチ処理のみ、ネイティブアラーム機能なし |
+| バッチ分析・可視化ダッシュボード | Athena + QuickSight | ❌ バッチ処理のみ、ネイティブアラーム機能なし。**QuickSightはCloudWatchメトリクスを直接データソースにできない**（S3/Athena経由のETLが別途必要） |
 | ストリームリアルタイム処理 | Kinesis + Lambda + DynamoDB | ❌ 3 サービス管理のオーバーエンジニアリング、CW で十分 |
+
+### QuickSightのデータソース対応（非対称に注意）（Udemy問23）
+
+- **CloudWatchメトリクスには直接接続不可**（S3/Athena経由のETLが必要、上表参照）
+- 一方、**Amazon OpenSearch Service（プロビジョンドドメインのみ）には直接統合できる**。**OpenSearch Serverlessコレクションは非対応**
+- OpenSearch経由でQuickSightにつなぐ場合、`text`型フィールドはQuickSightのデータセットで未サポート（`keyword`型併用か、スコア・カテゴリ等のメタデータ集計フィールドで代替）
 
 ### Bedrock ネイティブメトリクスの特徴
 - **追加設定不要**：Bedrock が自動で CloudWatch にパブリッシュ

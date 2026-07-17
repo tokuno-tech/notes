@@ -447,6 +447,8 @@ Cognito には 2 つの機能があり、目的が異なる。
 | 「クライアントアプリから S3/DynamoDB に直接アクセスさせたい」 | ✅ Identity Pools |
 | **「サービス間（M2M）の API 認証を IAM で強固に行いたい」** | ❌ **Cognito は不要。IAM ロール + SigV4 が正解** |
 
+**CognitoはPKCE付き認可コードフローをサポート**（OAuth 2.0認可サーバーとして機能。「認可されたユーザーのみアクセス可」+「PKCE」が要件に出たらCognitoが候補になる。詳細は[glossary_buzzwords.md](./glossary_buzzwords.md)のPKCE参照）
+
 ---
 
 ## Step Functions によるエージェントオーケストレーション（AIP-38）
@@ -529,6 +531,25 @@ Task / Choice / Parallel / Wait / Map などのステートを組み合わせて
 | プロトコル | 通常の HTTP リクエスト/レスポンス（ストリーミングは任意、必須ではない） |
 | AWSとの組み合わせ | **API Gateway 互換**（Lambda + API GW でサーバーレス化可能） |
 | AIP試験ポイント | サーバーレスでMCPサーバーを公開する → Streamable HTTP を選ぶ |
+
+### STDIOトランスポートの具体像（Udemy問35）
+
+```
+MCPクライアントがMCPサーバーを「同一マシン上の子プロセス」として起動
+  → クライアントとサーバーがstdin/stdoutのパイプで直接通信
+  → ネットワークもTLSも認証も不要（同一マシン内で完結するため）
+  → 別のLambda関数のような「リモートの別プロセス」とは原理的に通信不可
+```
+
+「AWS上でリモートのMCPサーバーと通信したい」が要件に出たら、STDIOは仕組み上不可能で即除外。**Streamable HTTP一択**。
+
+### API GatewayのHTTP APIでもMCPのStreamable HTTPが使える理由（Udemy問35・要注意）
+
+API GatewayのネイティブなレスポンスストリーミングはREST API限定機能（`responseTransferMode: STREAM`）で、**HTTP APIは非対応**（このルール自体は変わらない。[bedrock_core.md](./bedrock_core.md)参照）。
+
+ただし上表の通り、MCPの「ストリーミングは任意、必須ではない」という性質により、**HTTP APIの標準的なバッファリング（Lambdaの処理完了後にまとめて1回で返す）でもMCP通信としては成立する**。SSE形式のテキストを1回のレスポンスボディとしてまとめて返すことも許容されるため、真のリアルタイム逐次配信ができないHTTP APIでも要件を満たせる。
+
+→ 「ストリーミング＝HTTP API不可」という一般則を、MCP文脈にまでそのまま適用しない。**本当に1トークンごとの即時表示（低TTFB）が要件なら**REST APIのSTREAMモードやLambda Function URLが必要だが、**MCP通信の成立自体にはそこまでのリアルタイム性は求められない**。
 
 ### OIDC（OpenID Connect）
 

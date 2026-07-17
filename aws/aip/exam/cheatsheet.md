@@ -85,6 +85,7 @@
 - 量子化（数値精度: FP16/Binary=メモリ削減）と検索アルゴリズム（FLAT=厳密100%/HNSW=ANN高速）は直交 → 「メモリも速度も」=**HNSW+FP16**
 - 100% recall 必須 → **Flat（MemoryDB）**。ef_search を上げても100%は保証されない / 大規模・低レイテンシ許容 → HNSW
 - Kendra の関連性スコアは検索の確信度であって評価メトリクスではない
+- 「大量ドキュメント一括投入後に検索レイテンシだけ悪化＋CPU/JVMヒープは正常＋インデックス削除・再作成せず低負荷で改善」→ **シャード数をデータノード数の倍数に均等化＋セグメント統合(force_merge)＋ISMポリシーで定期スケジュール化**。原因はリソース不足ではなく**セグメント断片化**（k-NNはセグメントごとにHNSWグラフを構築するため、セグメントが多いと検索のたびに走査するグラフ数が増える）。インスタンスのスケールアップ・全件再インデックス・OpenSearch Serverlessへの移行はいずれも過大 or 見当違いの対処で不正解 → [bedrock_rag.md](../topics/bedrock_rag.md)
 - 「複数の多様なドキュメントソースを統合＋一貫したアクセスパターン＋運用負荷最小」→ **Bedrock ナレッジベース + 標準データソースコネクタ + 自動同期**。「自動同期」＝トリガー自体が自動という意味ではなく、差分検出/認証/フォーマット標準化がコネクタ内蔵という意味。Kendra+カスタムコネクタ+EventBridge(増分)+Glue ETL(標準化) は一見具体的でも自作コンポーネント3点盛りで運用負荷増（罠）
 - 選択肢の **Elasticsearch はベクトル非対応で即脱落** / **Comprehend がクエリ理解・拡張の選択肢なら不正解**（構文レベル止まり）
 - **OpenSearch Serverlessの403エラー**：IAM権限は`aoss:`プレフィックス（`es:ESHttp*`はマネージドドメイン用で無効）。データプレーンアクセスは`aoss:APIAccessAll`+`aoss:DashboardsAccessAll`の**2つセット必須**＋**データアクセスポリシー（IAMとは別体系、`Resource`にワイルドカードでパターン自動適用可）**の両方が要る。同期成功済みならネットワーク（VPCエンドポイント）は原因から除外 → [bedrock_rag.md](../topics/bedrock_rag.md)
@@ -112,12 +113,15 @@
 - 「本番トラフィックでエージェントのゴール達成率・ツール選択妥当性をリアルタイム継続評価、フルマネージド」→ **Bedrock AgentCore Evaluations（オンライン評価）**（組み込み評価子`Builtin.GoalSuccessRate`/`Builtin.ToolSelectionAccuracy`、LLM-as-a-Judge）。**CreateEvaluationJob（`applicationType`はModelEvaluation/RagEvaluationの2値のみ）はエージェントのマルチステップトレース評価に非対応**、CloudWatchのAgentsランタイムメトリクス（呼び出し数・処理時間等）はセマンティック品質を測れず、SageMaker Clarifyは特徴量帰属/バイアス分析が主目的でエージェント評価は設計対象外 → [bedrock_agents.md](../topics/bedrock_agents.md)
 - 「疎結合」「動的ツール選択」→ **Strands + MCP**（Step Functions/Flows は密結合・固定パス）
 - MCP：「複数FMで標準化されたツール接続」「FMを変えても接続を変えたくない」「運用負荷最小」→ **MCP**（相互運用性）
+- **プロンプトルーター（Prompt Router）とプロンプト管理（Prompt Management）を混同しない**：ルーター＝インテリジェントプロンプトルーティングの実体（複数モデル間のコスト/性能ベース振り分け、変数定義や出力形式制御の機能はない）／管理＝プロンプト内の変数（プレースホルダー）定義＋モデル選択＋出力形式指定＋フローのプロンプトノードへの統合。「4つの必須入力を変数化」「一貫した出力形式」→ Prompt Management一択
 - Agents 構築：マネージドで素早く → **Bedrock Agents** / コードで細かく・マルチプロバイダ → **Strands** / 専門エージェント振り分け → **Agent Squad**
 - 「調査→要約→レポート作成のような**逐次マルチエージェント連携**＋推論ループ/ツール呼び出し/コンテキスト引き渡しを**自前実装せず**カスタムオーケストレーションコード最小化」→ **Strands Agents SDK（Workflowパターン）**。**「コード最小限」＝「コードを一切書かない」ではなく「エージェント間の配線ロジック（推論ループ・コンテキスト受け渡し）を自作しない」の意味**——この軸を取り違えると、Step Functions（宣言的で書く量は少なく見えるが、LLM主導の推論ループ・ツール選択・コンテキスト管理はLambda内に結局手書きが必要）やECS/Lambda+SQSのような自前疎結合構成（配線ロジック全部自作）を誤って選びやすい。SwarmとGraphは他のマルチエージェント形状（対等協調・分岐合流）向けで今回は該当しない → [bedrock_agents.md](../topics/bedrock_agents.md)
 - 「**Strands Agents SDK**でツール定義」→ Python関数に**`@tool`デコレータ**（OpenAPIスキーマ/アクショングループはBedrock Agents側の話で製品レイヤーが違うため即不正解）。**Strands SDKにパラメータ自動検証機構は無く**、検証・例外処理はツール関数内に自前実装するのが開発者の責務。ツール実行環境の分離は明示的にLambda/EC2/Fargate等へ配置（オーケストレーションループとは別実行環境）。Step FunctionsはStrandsのモデル駆動ループ自体の代替にはならない（上位ワークフローの1ステップとして呼ぶのはOK） → [bedrock_agents.md](../topics/bedrock_agents.md)
 - AgentCore：既存Pythonをデプロイ・インフラ最小 → **Runtime** / HTTPサーバ自動管理 → **SDK(@app.entrypoint)** / コンテナ化自動 → **スターターツールキット**
 - レガシーAPI統合＋「複数エージェントで再利用」「運用負荷最小」→ **MCPサーバー（関数呼び出しスキーマ）＋AgentCore**／REST変換・プロキシ層は見た目の標準化のみで関数呼び出しの抽象化・再利用機構がなく不正解／エージェントごとのサイドカーミドルウェアは重複デプロイでスケールせず不正解
 - 「AgentCore Runtime/Gatewayを企業IdP(Entra ID等)のOIDCで認証・運用負荷最小」→ **AgentCore Identityをインバウンドプロバイダーとして直接設定**（ディスカバリーURL＋許可オーディエンス(aud)の2項目だけで完結）。Cognitoユーザープール経由・IAM Identity Center経由・API Gateway+カスタムLambdaオーソライザーはいずれも別インフラ構築が必要で運用負荷増（罠） → [bedrock_agents.md](../topics/bedrock_agents.md)
+- **STDIOトランスポート＝同一マシン上の子プロセス通信のみ**（stdin/stdoutパイプ、ネットワーク越し不可）。「AWS上のリモートMCPサーバーと通信」が要件なら即除外、**Streamable HTTP一択**
+- **「ストリーミング＝HTTP API不可」の一般則をMCP文脈にそのまま適用しない**：MCPのStreamable HTTPは「ストリーミングが任意」の仕様なので、HTTP APIの標準バッファリング（Lambda完了後にまとめて返す）でもMCP通信としては成立する。真の低TTFB・逐次配信が要件ならREST API STREAMモード/Lambda Function URLが必要だが、MCP通信の成立自体にはそこまで求められない → [bedrock_agents.md](../topics/bedrock_agents.md)
 - **MCPサーバーをLambdaで本番公開する時の認証の選び分け**（呼び出す相手が誰かで決まる）：
   - 呼ぶのが**AWSアカウントを持つアプリ/サービス**（自社の別アプリ・IAMロールを渡せるサードパーティ＝クロスアカウントロール）→ **Lambda関数URL(Streamable HTTP)＋IAM認証(SigV4)**。API Gateway等の追加インフラ不要で運用負荷最小。「厳格な認証＋運用負荷最小＋MCP標準トランスポート維持」の3点が揃ったらこれ
   - 呼ぶのが**ログインする人間のエンドユーザー**（ID/パスワードでサインインする一般利用者）→ **API Gateway＋Cognito(OAuth)**。ただし追加2サービス分の運用増を伴うので「運用負荷最小」が最優先なら負ける
@@ -208,8 +212,11 @@
 - RAG 評価：取得のみ → **retrieve-only** / 取得+生成の総合（本番前）→ **retrieve-and-generate**
 - 「複数チャンク化戦略の比較＋複数FMの生成品質評価＋デプロイ品質しきい値」→ **retrieve-and-generateジョブ1本＋カスタムメトリクス（1〜5等の`ratingScale`自由設定・最大10個）+ LLM-as-a-judge**。組み込みメトリクスは常に0〜1正規化。KBは1ジョブ1つ制限なので複数戦略比較には**BYOI（`precomputedRagSourceConfig`＋`knowledgeBaseIdentifier`ごと格納）**が必要。retrieve-onlyのみ・戦略ごとに評価ジョブ分離・手動レビュー依存はいずれも不正解（自動しきい値適用や単一ジョブでの一貫比較ができない） → [model_evaluation.md](../topics/model_evaluation.md)
 - 自動採点 → **LLM-as-a-judge**。モデル自身の自己採点は自己バイアスで客観性ゼロ → 規制業界で不適切
+- **Bedrock自動評価には2経路ある**：従来型NLPメトリクス経路（ROUGE/BLEU/Accuracy等）と**LLM-as-a-judge経路（Automatic: Model as a judge）**。「ステレオタイプ検出」「業務固有ルーブリック追加」等の要件は**LLM-as-a-judge経路限定**の機能（Builtin.Stereotyping等のResponsible AI系11メトリクス＋カスタムメトリクス最大10個）。従来型経路・Prompt Management・SageMaker Clarify（Bedrock FM非対応）はいずれも代替不可。1ジョブ最大1,000プロンプト、JSONLの`category`キーでグループ別スコア集計 → [model_evaluation.md](../topics/model_evaluation.md)
 - CloudWatch Synthetics は外形監視（合成ユーザーの定期実行）。LLM出力の品質評価には使わない
 - 「基準値が自動更新」→ **CloudWatch 異常検出アラーム**（固定しきい値・Contributor Insights は自動更新不可）
+- 「技術メトリクス＋ビジネスメトリクスを統合監視＋劣化を動的検出＋相関＋自動アラート」→ **CloudWatchカスタムダッシュボード（ビジネス側は`PutMetricData`でインポート）＋異常検出付き複合アラーム＋SNS通知**（全部CloudWatchネイティブ、追加サービス不要）。**QuickSight/Managed Grafanaは可視化(BI)ツールで運用監視・リアルタイムアラート基盤ではない**（罠）。**EventBridgeにメトリクス変動を監視してアラームを出す機能はない**（閾値・変動監視はCloudWatchアラームの役割）。Grafana+Lambda「自動修復」は要件が「通知」の時はズレ → [monitoring_observability.md](../topics/monitoring_observability.md)
+- **「BI/可視化＝QuickSight」の反射に2回連続で引っかかった要注意ポイント**：**QuickSightはCloudWatchメトリクスを直接データソースにできない**（S3/Athena経由のETLが別途必要＝運用増）。「複数Bedrockアプリのトークン使用量をリアルタイム可視化＋ダッシュボード＋アラート＋運用最小」→ **CloudWatchダッシュボード(ネイティブメトリクス)+アラーム ＋ CloudWatch Logs Insights(呼び出しログのアドホック分析、結果はログウィジェットとしてダッシュボードに追加可)**の2本柱。BedrockとManaged Grafanaの間にネイティブなzero-ETL統合は存在しない → [monitoring_observability.md](../topics/monitoring_observability.md)
 - 「どれが一番多いか可視化・ランキング」→ **Contributor Insights** /「複数条件が重なった時だけ警告」→ **複合アラーム**
 - 「会話内容を監査」「プロンプト履歴を記録」→ **モデル呼び出しのログ記録（Model Invocation Logging）**（CloudTrail はAPIメタデータのみでプロンプト内容なし）
 - モデル呼び出しログの送信先：テキスト・リアルタイム分析 → **CloudWatch Logs** / 画像・動画・100KB超の大データ・バッチ分析 → **S3 + Athena**（CloudWatch Logsはバイナリ画像非対応）
