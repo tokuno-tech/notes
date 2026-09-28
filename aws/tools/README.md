@@ -8,6 +8,7 @@ CloudTech（kws-cloud-tech.com）の問題演習ページから、Claudeに貼�
 （LearnDash + wpProQuiz）であれば試験区分を問わず動く。
 
 BenchPrep（AWS公式模試）用は別物 → [`../aip/tools/`](../aip/tools/)
+Udemyの練習テスト用 → このページ下部の [udemy-quiz-extractor](#udemy-quiz-extractor)
 
 ## セットアップ（最初の1回だけ）
 
@@ -71,6 +72,75 @@ BenchPrep（AWS公式模試）用は別物 → [`../aip/tools/`](../aip/tools/)
 ./build.sh
 ```
 
-`cloudtech-quiz-extractor.bookmarklet.txt` が再生成されるので、ブックマークのURL欄に上書きする。
+このディレクトリの `*-quiz-extractor.js` すべてについて `*.bookmarklet.txt` が再生成されるので、
+ブックマークのURL欄に上書きする（`./build.sh udemy-quiz-extractor.js` のように1本だけも可）。
 ビルドはコメント除去と空白圧縮をするだけなので、**文字列や正規表現リテラルの中に連続空白や
 生のU+00A0を書かないこと**（書いた場合は build.sh がエラーで止まる）。
+
+---
+
+# udemy-quiz-extractor
+
+Udemyの練習テスト（`/course/<slug>/learn/quiz/<数字>/...`）から、CloudTech版と同じ要領で
+問題文・選択肢・正誤・説明だけを抜き出してコピーするブックマークレット。
+Udemyはページのソースに問題が入っていない（Reactが後から描画する）ので、ソース表示ではなく
+こちらを使う。
+
+セットアップは CloudTech 版と同じで、`udemy-quiz-extractor.bookmarklet.txt` の中身をブックマークのURLにする。
+
+## 使い方
+
+練習テストのページでブックマークをクリックすると、右上にパネルが出る。
+
+- **画面から**
+  - **表示中の1問** — 演習モードで回答した直後の画面など、いま表示されている問題
+    （見直し画面のように複数問が並んでいるときは「画面上の全問 / 画面上の誤答」になる）
+- **テスト全体 (API)** — パネルを開いた時点で裏で取得し、終わるとボタンが出る
+  - **誤答した問題だけ** — 最新の受験回（受験中の回を含む）で間違えたもの
+  - **回答済みすべて**
+  - **このテストの全問** — 未回答も含め、正解と解説つき
+
+「解説を含める」を外すと、選択肢ごとの説明と全体的な説明を省く。
+
+## 出力フォーマット
+
+```
+# Udemy 【構成図解付き】…AWS ANS-C01日本語実践問題220問 (Advanced Networking) / 練習テスト1
+出典: https://www.udemy.com/course/aws-ans-practice/learn/quiz/6947581/test
+
+### 問題1 (1/65) — 誤答
+分野: …                                  ← APIから取ったときだけ
+
+(問題文)
+
+【選択肢】
+A. × (選択肢)
+   説明: 不正解 …                        ← 選択肢ごとの説明
+B. ○ (選択肢)
+   説明: 正解 …
+C. × ←あなたの解答 (選択肢)
+   説明: 不正解 …
+
+あなたの解答: C / 正解: B
+
+【全体的な説明】
+**問われている要件**
+- …
+［図］                                    ← 構成図の位置（画像そのものは落とす）
+- [Network Load Balancer のリスナー](https://docs.aws.amazon.com/…)
+```
+
+## 仕様メモ
+
+- 画面から取る場合、正誤は選択肢ごとのクラスで判定する:
+  `answer-correct`（正解）/ `answer-incorrect`（選んで外れ）/ `answer-skipped`（選んでいない）。
+  正解を自分で選んだときは、ラベルに「回答」を含むか、選択アイコンが `*-empty` 以外かで判定する。
+- 表示中の問題がまだ未回答で正解が取れないときは、APIで取った同じ問題（問題文の先頭で照合）に差し替えて出力する。
+- API は次の順に叩く（ログイン中のCookieでそのまま通る想定）:
+  1. `/api-2.0/users/me/subscribed-courses/{courseId}/quizzes/{quizId}/user-attempted-quizzes/latest/` — 最新の受験回
+  2. `/api-2.0/quizzes/{quizId}/assessments/?version=…` — 問題・選択肢・選択肢ごとの説明・全体的な説明・正解
+  3. `/api-2.0/users/me/subscribed-courses/{courseId}/user-attempted-quizzes/{attemptId}/assessment-answers/` — 自分の解答
+  - 1 か 3 が失敗しても 2 が取れれば「正解と解説のみ」で動く。失敗した段階はパネルに表示される。
+- API経由の「問題N」はAPIが返す順の番号。画面の番号とずれていたら、問題文で照合すること。
+- APIのHTMLは `DOMParser` 上で画像・スクリプト・`on*` 属性を除去してから描画する（ページ上で実行させない）。
+

@@ -1,11 +1,14 @@
 #!/bin/bash
-# cloudtech-quiz-extractor.js からブックマークレット用URLを生成する。
-# 使い方: ./build.sh  (このディレクトリで実行)
+# *-quiz-extractor.js からブックマークレット用URL(*.bookmarklet.txt)を生成する。
+# 使い方: ./build.sh                          (このディレクトリの全ソース)
+#         ./build.sh udemy-quiz-extractor.js  (指定したものだけ)
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SRC="cloudtech-quiz-extractor.js"
-OUT="cloudtech-quiz-extractor.bookmarklet.txt"
+if [ $# -gt 0 ]; then SRCS=("$@"); else SRCS=(*-quiz-extractor.js); fi
+
+for SRC in "${SRCS[@]}"; do
+OUT="${SRC%.js}.bookmarklet.txt"
 
 node -e '
 const fs = require("fs");
@@ -32,3 +35,4 @@ fs.writeFileSync("/tmp/.ct-bookmarklet-check.js", decodeURIComponent(enc.replace
 ' "$OUT"
 node --check /tmp/.ct-bookmarklet-check.js && echo "構文チェックOK"
 rm -f /tmp/.ct-bookmarklet-check.js
+done
