@@ -17,11 +17,15 @@
   textarea { width: 100%; box-sizing: border-box; height: 100px; margin-top: 6px; font: 11px/1.4 monospace; }
 </style>
 <h1>MondaiPicker <span class="site" id="site"></span></h1>
-<div id="extract"></div>
+<button class="primary" data-id="current">表示中の1問</button>
+<button data-id="wrong">誤答した問題だけ</button>
+<button data-id="answered">回答済みすべて</button>
+<button data-id="all">このページ/テストの全問</button>
 <div id="msg"></div>
 <small id="notes"></small>
 <hr>
 <label><input type="checkbox" id="exp"> 解説を含める</label>
 <label id="tallRow"><input type="checkbox" id="on"> 問題エリアを縦に広げる (Udemy)</label>
 <small>Alt+Shift+C: 表示中の1問をコピー / Alt+Shift+T: 縦広げ切替</small>
+<script src="run.js"></script>
 <script src="popup.js"></script>

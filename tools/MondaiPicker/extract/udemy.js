@@ -536,121 +536,61 @@
     });
   }
 
-  /* ---------- 公開インターフェース (popup / ショートカットから呼ばれる) ---------- */
+  /* ---------- 公開インターフェース (bridge.js 経由で押下時に呼ばれる) ---------- */
 
   function getQuizId() {
     return (location.pathname.match(/\/quiz\/(\d+)/) || [])[1] || "";
   }
 
-  function scanDom() {
-    var roots = findDomRoots();
-    var qs = roots.map(function (r, i) {
-      return parseDomQuestion(r, i, roots.length);
-    });
-    dropHost();
-    return qs;
-  }
-
-  /* API結果はクイズIDごとに保持し、popupを開き直しても再取得しない */
-  var apiCache = { id: "", promise: null };
-  function ensureApi(quizId) {
-    if (apiCache.id !== quizId || !apiCache.promise) {
-      apiCache.id = quizId;
-      apiCache.promise = loadApi(quizId).then(
-        function (res) {
-          api = res;
-          return res;
-        },
-        function (e) {
-          dropHost();
-          apiCache.promise = null;
-          throw e;
-        }
-      );
-    }
-    return apiCache.promise;
-  }
-
-  function apiLists(res) {
-    var answered = res.questions.filter(function (d) {
-      return d.answered;
-    });
-    return { apiWrong: wrongOf(answered), apiAnswered: answered, apiAll: res.questions };
-  }
-
-  function pick(id, domQs, res) {
-    var l = { dom: domQs.length <= 1 ? domQs.slice(0, 1) : domQs, domWrong: wrongOf(domQs) };
-    if (res) {
-      var a = apiLists(res);
-      for (var k in a) l[k] = a[k];
-    }
-    return l[id] || [];
-  }
-
   window.__tqExtractors = window.__tqExtractors || {};
   window.__tqExtractors.udemy = {
     name: "Udemy",
-    describe: function () {
-      var quizId = getQuizId();
-      var domQs = scanDom();
-      if (!domQs.length && !quizId) return Promise.resolve(null);
-
-      var domButtons =
-        domQs.length <= 1
-          ? [{ id: "dom", label: "表示中の1問" + (domQs[0] ? " (" + domQs[0].no + ")" : " なし"), count: domQs.length, primary: true }]
-          : [
-              { id: "dom", label: "画面上の全問", count: domQs.length },
-              { id: "domWrong", label: "画面上の誤答", count: wrongOf(domQs).length }
-            ];
-      var groups = [{ label: "画面から", buttons: domButtons }];
-
-      if (!quizId) {
-        return Promise.resolve({ groups: groups, notes: ["URLにクイズIDが無いためAPI取得はしません"] });
-      }
-      return ensureApi(quizId).then(
-        function (res) {
-          var a = apiLists(res);
-          groups.push({
-            label: "テスト全体 (API)",
-            buttons: [
-              { id: "apiWrong", label: "誤答した問題だけ", count: a.apiWrong.length },
-              { id: "apiAnswered", label: "回答済みすべて", count: a.apiAnswered.length },
-              { id: "apiAll", label: "このテストの全問", count: a.apiAll.length }
-            ]
-          });
-          var notes = [
-            res.attempt
-              ? "解答履歴: 最新の受験回" + (res.attempt.completion_time ? "(完了済み)" : "(受験中)")
-              : "解答履歴なし: 正解と解説のみ"
-          ].concat(res.notes);
-          return { groups: groups, notes: notes };
-        },
-        function (e) {
-          return { groups: groups, notes: ["API取得に失敗: " + e.message] };
-        }
-      );
-    },
+    /* id: current | wrong | answered | all
+       current は画面から、それ以外はAPI(テスト全体)から取る。APIが使えなければ画面の問題で代用 */
     run: function (id, withExp) {
       var quizId = getQuizId();
-      var domQs = scanDom();
+      var roots = findDomRoots();
+      var domQs = roots.map(function (r, i) {
+        return parseDomQuestion(r, i, roots.length);
+      });
+      dropHost();
       if (!domQs.length && !quizId) {
         return Promise.reject(new Error("問題が見つかりません。Udemyの練習テストのページで実行してください。"));
       }
-      /* 画面の問題が未回答なら正解をAPIで補う。取れなければ画面だけで続行 */
+      var notes = [];
       var p = quizId
-        ? ensureApi(quizId).catch(function () {
+        ? loadApi(quizId).then(null, function (e) {
+            dropHost();
+            notes.push("API取得に失敗したため画面の問題だけで抽出: " + e.message);
             return null;
           })
         : Promise.resolve(null);
       return p.then(function (res) {
-        var list = pick(id, domQs, res);
-        return { text: build(resolve(list), withExp), count: list.length };
+        api = res;
+        var src = domQs;
+        if (id !== "current") {
+          if (res) {
+            src = res.questions;
+            notes.push(
+              res.attempt
+                ? "解答履歴: 最新の受験回" + (res.attempt.completion_time ? "(完了済み)" : "(受験中)")
+                : "解答履歴なし: 正解と解説のみ"
+            );
+            notes = notes.concat(res.notes);
+          }
+        }
+        var answered = src.filter(function (d) {
+          return d.answered;
+        });
+        var lists = {
+          current: domQs.length <= 1 ? domQs : wrongOf(domQs),
+          wrong: wrongOf(answered),
+          answered: answered,
+          all: src
+        };
+        var list = lists[id] || [];
+        return { text: build(resolve(list), withExp), count: list.length, notes: notes };
       });
-    },
-    quick: function (withExp) {
-      var n = findDomRoots().length;
-      dropHost();
-      return this.run(n <= 1 ? "dom" : "domWrong", withExp);
     }
   };
 })();

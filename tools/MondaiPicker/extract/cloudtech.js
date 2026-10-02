@@ -276,65 +276,33 @@
   }
 
 
-  /* ---------- 公開インターフェース (popup / ショートカットから呼ばれる) ---------- */
-
-  function scan() {
-    var lis = qa(document, "li.wpProQuiz_listItem");
-    if (!lis.length) return null;
-    var currentEl = lis.filter(isShown)[0] || null;
-    var parsed = lis.map(parseQuestion);
-    dropHost();
-    var current = currentEl ? parsed[lis.indexOf(currentEl)] : null;
-    var answered = parsed.filter(function (d) {
-      return d.answered;
-    });
-    var wrong = answered.filter(function (d) {
-      return d.verdict === "誤答";
-    });
-    return { current: current, answered: answered, wrong: wrong, all: parsed };
-  }
-
-  function lists(r) {
-    return {
-      current: r.current ? [r.current] : [],
-      wrong: r.wrong,
-      answered: r.answered,
-      all: r.all
-    };
-  }
+  /* ---------- 公開インターフェース (bridge.js 経由で押下時に呼ばれる) ---------- */
 
   window.__tqExtractors = window.__tqExtractors || {};
   window.__tqExtractors.cloudtech = {
     name: "CloudTech",
-    /* ボタン定義を返す。対象ページでなければ null */
-    describe: function () {
-      var r = scan();
-      if (!r) return Promise.resolve(null);
-      var l = lists(r);
-      return Promise.resolve({
-        groups: [
-          {
-            label: "",
-            buttons: [
-              { id: "current", label: "表示中の1問" + (r.current ? " (" + (r.current.id || r.current.no) + ")" : " なし"), count: l.current.length, primary: true },
-              { id: "wrong", label: "誤答した問題だけ", count: l.wrong.length },
-              { id: "answered", label: "回答済みすべて", count: l.answered.length },
-              { id: "all", label: "このページの全問", count: l.all.length }
-            ]
-          }
-        ],
-        notes: []
-      });
-    },
-    /* id のボタンに対応するテキストを返す */
+    /* id: current | wrong | answered | all */
     run: function (id, withExp) {
-      var r = scan();
-      if (!r) return Promise.reject(new Error("問題が見つかりません。CloudTechの問題演習ページで実行してください。"));
-      var list = lists(r)[id] || [];
-      return Promise.resolve({ text: build(list, withExp), count: list.length });
-    },
-    quick: function (withExp) {
-      return this.run("current", withExp);
+      var lis = qa(document, "li.wpProQuiz_listItem");
+      if (!lis.length) {
+        return Promise.reject(new Error("問題が見つかりません。CloudTechの問題演習ページで実行してください。"));
+      }
+      var currentEl = lis.filter(isShown)[0] || null;
+      var parsed = lis.map(parseQuestion);
+      dropHost();
+      var answered = parsed.filter(function (d) {
+        return d.answered;
+      });
+      var lists = {
+        current: currentEl ? [parsed[lis.indexOf(currentEl)]] : [],
+        wrong: answered.filter(function (d) {
+          return d.verdict === "誤答";
+        }),
+        answered: answered,
+        all: parsed
+      };
+      var list = lists[id] || [];
+      return Promise.resolve({ text: build(list, withExp), count: list.length, notes: [] });
     }
   };
 })();

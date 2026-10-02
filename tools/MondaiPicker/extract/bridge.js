@@ -1,13 +1,11 @@
-/* popup / background からのメッセージを、ホスト名で選んだ抽出器に中継する */
+/* 押下時に注入され、ホスト名で選んだ抽出器を実行する。常駐はしない */
 (() => {
   const SITES = [
     { re: /(^|\.)udemy\.com$/, key: "udemy" },
     { re: /(^|\.)kws-cloud-tech\.com$/, key: "cloudtech" }
   ];
-  const site = SITES.find((s) => s.re.test(location.hostname));
-  const ex = () => site && window.__tqExtractors && window.__tqExtractors[site.key];
 
-  function toast(text, ok) {
+  window.__tqToast = (text, ok) => {
     const id = "__tqToast";
     const old = document.getElementById(id);
     if (old) old.remove();
@@ -20,27 +18,16 @@
       "background:" + (ok ? "#16a34a" : "#dc2626") + ";";
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 2500);
-  }
+  };
 
-  const fail = (send) => (e) => send({ error: e && e.message ? e.message : String(e) });
-
-  chrome.runtime.onMessage.addListener((msg, _sender, send) => {
-    const e = ex();
-    if (msg.type === "toast") {
-      toast(msg.text, msg.ok);
-      return;
-    }
-    if (!e) {
-      send({ error: "このページは対象外です" });
-      return;
-    }
-    if (msg.type === "describe") {
-      e.describe().then((d) => send({ name: e.name, data: d }), fail(send));
-    } else if (msg.type === "run") {
-      e.run(msg.id, msg.withExp).then(send, fail(send));
-    } else if (msg.type === "quick") {
-      e.quick(msg.withExp).then(send, fail(send));
-    }
-    return true; // 非同期応答
-  });
+  /* 失敗は例外にせず {error} で返す(executeScript越しでも内容が落ちないように) */
+  window.__tqRun = (id, withExp) => {
+    const site = SITES.find((s) => s.re.test(location.hostname));
+    const ex = site && window.__tqExtractors && window.__tqExtractors[site.key];
+    if (!ex) return Promise.resolve({ error: "このサイトは対象外です(Udemy / CloudTech のみ)" });
+    return ex.run(id, withExp).then(
+      (r) => Object.assign({ site: ex.name }, r),
+      (e) => ({ error: e && e.message ? e.message : String(e) })
+    );
+  };
 })();

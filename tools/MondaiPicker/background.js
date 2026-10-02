@@ -1,3 +1,5 @@
+importScripts("run.js");
+
 chrome.commands.onCommand.addListener(async (cmd) => {
   if (cmd === "toggle") {
     const { enabled } = await chrome.storage.sync.get({ enabled: true });
@@ -10,23 +12,21 @@ chrome.commands.onCommand.addListener(async (cmd) => {
 async function copyQuick() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
-  const toast = (text, ok) => chrome.tabs.sendMessage(tab.id, { type: "toast", text, ok }).catch(() => {});
   try {
     const { withExp } = await chrome.storage.sync.get({ withExp: true });
-    const r = await chrome.tabs.sendMessage(tab.id, { type: "quick", withExp });
-    if (!r || r.error) throw new Error((r && r.error) || "応答がありません");
+    const r = await mpRun(tab.id, "current", withExp);
+    if (r.error) throw new Error(r.error);
     if (!r.count) throw new Error("コピー対象の問題がありません");
     await writeClipboard(r.text);
-    toast(`コピーしました (${r.count}問 / ${r.text.length}文字)`, true);
+    await mpToast(tab.id, `コピーしました (${r.count}問 / ${r.text.length}文字)`, true);
   } catch (e) {
-    toast("コピー失敗: " + e.message, false);
+    await mpToast(tab.id, "コピー失敗: " + e.message, false);
   }
 }
 
 // service worker にはクリップボードAPIが無いため、offscreen document 経由で書き込む
 async function writeClipboard(text) {
-  const has = await chrome.offscreen.hasDocument();
-  if (!has) {
+  if (!(await chrome.offscreen.hasDocument())) {
     await chrome.offscreen.createDocument({
       url: "offscreen.html",
       reasons: ["CLIPBOARD"],
