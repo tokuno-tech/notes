@@ -8,6 +8,11 @@ chrome.storage.onChanged.addListener((c) => {
   if (c.enabled) on.checked = c.enabled.newValue;
 });
 
+// 一時停止の自動再開
+const resume = $("resume");
+chrome.storage.sync.get({ autoResume: true }, (r) => (resume.checked = r.autoResume));
+resume.addEventListener("change", () => chrome.storage.sync.set({ autoResume: resume.checked }));
+
 // 解説を含める
 const exp = $("exp");
 chrome.storage.sync.get({ withExp: true }, (r) => (exp.checked = r.withExp));
@@ -61,5 +66,5 @@ document.querySelectorAll("button[data-id]").forEach((el) => {
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
   let host = "";
   try { host = new URL(tab.url).hostname; } catch (e) {}
-  if (!/(^|\.)udemy\.com$/.test(host)) $("tallRow").style.display = "none";
+  if (!/(^|\.)udemy\.com$/.test(host)) { $("tallRow").style.display = "none"; $("resumeRow").style.display = "none"; }
 });

@@ -39,7 +39,28 @@
     if (c.enabled) setOn(c.enabled.newValue);
   });
 
+  // 無操作で出る「テストが一時停止されました」を自動で閉じて再開する
+  let autoResume = true;
+  let resumeTimer = 0;
+  function tryResume() {
+    resumeTimer = 0;
+    if (!autoResume) return;
+    const btn = sel('[data-purpose="unpause-test"]');
+    if (btn) btn.click();
+  }
+  function scheduleResume() {
+    if (resumeTimer || !autoResume) return;
+    resumeTimer = setTimeout(tryResume, 300);
+  }
+  chrome.storage.sync.get({ autoResume: true }, (r) => (autoResume = r.autoResume));
+  chrome.storage.onChanged.addListener((c) => {
+    if (c.autoResume) autoResume = c.autoResume.newValue;
+  });
+
   window.addEventListener("resize", schedule);
   // 問題切替・サイドバー開閉などDOM変化に追従
-  new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+  new MutationObserver(() => {
+    schedule();
+    scheduleResume();
+  }).observe(document.body, { childList: true, subtree: true });
 })();
