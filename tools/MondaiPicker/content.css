@@ -1,0 +1,16 @@
+/* class名末尾のハッシュは変わりうるので部分一致で指定。
+   position等の配置は触らず、高さの制限だけを「画面高さ - ヘッダー」に置き換える。
+   (元の構造: 動画用の16:9ボックスの中にクイズが絶対配置されている) */
+html.tallquiz-on [class*="curriculum-item-view--scaled-height-limiter"],
+html.tallquiz-on [class*="curriculum-item-view--absolute-height-limiter"],
+html.tallquiz-on [class*="curriculum-item-view--aspect-ratio-container"] {
+  height: calc(100vh - 56px) !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  aspect-ratio: auto !important;
+}
+html.tallquiz-on [class*="quiz-page-layout--scroll-container"] {
+  max-height: none !important;
+}

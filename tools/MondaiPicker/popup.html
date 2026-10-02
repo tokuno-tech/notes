@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  body { font: 13px/1.5 system-ui, sans-serif; width: 300px; margin: 12px; }
+  h1 { font-size: 13px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
+  .site { font-weight: normal; color: #2563eb; }
+  .grp { font-size: 11px; color: #666; margin: 10px 0 4px; }
+  button { display: block; width: 100%; margin: 0 0 6px; padding: 7px 10px; border: 0; border-radius: 6px;
+           cursor: pointer; font: inherit; text-align: left; background: #e5e7eb; color: #111; }
+  button.primary { background: #2563eb; color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 6px 0; }
+  hr { border: 0; border-top: 1px solid #ddd; margin: 10px 0; }
+  small { color: #666; display: block; margin-top: 4px; white-space: pre-wrap; }
+  #msg { margin-top: 6px; font-size: 12px; }
+  #msg.err { color: #dc2626; }
+  textarea { width: 100%; box-sizing: border-box; height: 100px; margin-top: 6px; font: 11px/1.4 monospace; }
+</style>
+<h1>MondaiPicker <span class="site" id="site"></span></h1>
+<div id="extract"></div>
+<div id="msg"></div>
+<small id="notes"></small>
+<hr>
+<label><input type="checkbox" id="exp"> 解説を含める</label>
+<label id="tallRow"><input type="checkbox" id="on"> 問題エリアを縦に広げる (Udemy)</label>
+<small>Alt+Shift+C: 表示中の1問をコピー / Alt+Shift+T: 縦広げ切替</small>
+<script src="popup.js"></script>

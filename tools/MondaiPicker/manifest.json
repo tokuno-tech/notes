@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "MondaiPicker",
+  "version": "2.0.0",
+  "description": "Udemyの演習テスト画面を縦に広げ、UdemyとCloudTechの問題をClaude貼り付け用に抽出します。",
+  "permissions": ["storage", "offscreen", "clipboardWrite"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.udemy.com/course/*/learn/*"],
+      "css": ["content.css"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.udemy.com/course/*/learn/*", "https://kws-cloud-tech.com/*"],
+      "js": ["extract/udemy.js", "extract/cloudtech.js", "extract/bridge.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "MondaiPicker" },
+  "commands": {
+    "toggle": {
+      "suggested_key": { "default": "Alt+Shift+T" },
+      "description": "問題エリアの縦広げ ON/OFF (Udemy)"
+    },
+    "copy-quick": {
+      "suggested_key": { "default": "Alt+Shift+C" },
+      "description": "表示中の1問を抽出してコピー"
+    }
+  }
+}
