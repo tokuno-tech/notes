@@ -6,7 +6,7 @@
 
 - **[aws/mla/](./aws/mla/)** — AWS Certified Machine Learning Engineer – Associate（MLA-C01）学習ノート
 - **[aws/aip/](./aws/aip/)** — AWS Certified Generative AI Developer – Professional（AIP-C01）学習ノート
-- **[aws/tools/](./aws/tools/)** — CloudTech / Udemy の問題ページから問題文・選択肢・正誤・解説を抽出するブックマークレット
+- **[tools/MondaiPicker/](./tools/MondaiPicker/)** — CloudTech / Udemy の問題を抽出し、Udemyの間違い・見直しマークの問題だけを解くChrome拡張
 
 ## 方針
 
