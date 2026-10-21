@@ -1,8 +1,8 @@
 /* popup と background 共通: 押下したタブに抽出器を注入して実行する */
-async function mpRun(tabId, id, withExp) {
+async function mpEnsure(tabId) {
   const [{ result: loaded }] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: () => !!window.__tqRun
+    func: () => !!window.__tqCollect
   });
   if (!loaded) {
     await chrome.scripting.executeScript({
@@ -10,10 +10,24 @@ async function mpRun(tabId, id, withExp) {
       files: ["extract/udemy.js", "extract/cloudtech.js", "extract/bridge.js"]
     });
   }
+}
+
+async function mpRun(tabId, id, withExp) {
+  await mpEnsure(tabId);
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
     func: (i, w) => window.__tqRun(i, w),
     args: [id, withExp]
+  });
+  return result || { error: "応答がありません" };
+}
+
+/* 演習用: 間違い + 見直しマークの問題を取り込む */
+async function mpCollect(tabId) {
+  await mpEnsure(tabId);
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => window.__tqCollect()
   });
   return result || { error: "応答がありません" };
 }

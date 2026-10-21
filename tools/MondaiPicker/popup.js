@@ -62,9 +62,28 @@ document.querySelectorAll("button[data-id]").forEach((el) => {
   };
 });
 
+// 演習: 間違い+見直しマークを取り込んで、拡張内の別画面で解く
+$("openPractice").onclick = () => chrome.tabs.create({ url: chrome.runtime.getURL("practice.html") });
+$("practice").onclick = async () => {
+  showMsg("取り込み中…(結果画面ではフィルターを一瞬切り替えます)");
+  $("notes").textContent = "";
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const r = await mpCollect(tab.id);
+    if (r.error) return showMsg(r.error, true);
+    $("notes").textContent = r.notes.join("\n");
+    if (!r.questions.length) return showMsg("間違いも見直しマークの問題も見つかりませんでした", true);
+    await chrome.storage.local.set({ ["mp:quiz:" + r.quizId]: r });
+    chrome.tabs.create({ url: chrome.runtime.getURL("practice.html?quiz=" + r.quizId) });
+  } catch (e) {
+    showMsg("取り込みに失敗: " + e.message, true);
+  }
+};
+
 // 縦広げはUdemyでしか意味がないので、他サイトでは隠す
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
   let host = "";
   try { host = new URL(tab.url).hostname; } catch (e) {}
+  if (/(^|\.)udemy\.com$/.test(host)) $("practice").style.display = "";
   if (!/(^|\.)udemy\.com$/.test(host)) { $("tallRow").style.display = "none"; $("resumeRow").style.display = "none"; }
 });

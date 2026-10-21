@@ -382,11 +382,19 @@
       correct: cor,
       verdict: judge(sel, cor) || (ua ? "未回答" : ""),
       answered: sel.length > 0,
-      key: squash(body).slice(0, 80)
+      key: squash(body).slice(0, 80),
+      src: a
     };
   }
 
-  function loadApi(quizId) {
+  function attemptById(courseId, quizId, attemptId) {
+    var base =
+      "/api-2.0/users/me/subscribed-courses/" + courseId + "/quizzes/" + quizId + "/user-attempted-quizzes/";
+    var f = "draft=false&fields[user_attempted_quiz]=id,version,created,completion_time";
+    return apiGet(base + attemptId + "/?" + f);
+  }
+
+  function loadApi(quizId, attemptId) {
     var notes = [];
     var quizP = apiGet(
       "/api-2.0/quizzes/" + quizId + "/?draft=false&fields[quiz]=id,title,version"
@@ -396,7 +404,11 @@
     var courseP = getCourseId();
     var attP = courseP
       .then(function (cid) {
-        return latestAttempt(cid, quizId);
+        if (!attemptId) return latestAttempt(cid, quizId);
+        return attemptById(cid, quizId, attemptId).catch(function () {
+          notes.push("受験回 " + attemptId + " を直接取得できなかったため、最新の受験回で代用");
+          return latestAttempt(cid, quizId);
+        });
       })
       .catch(function (e) {
         notes.push("解答履歴を取得できません: " + e.message);
@@ -536,6 +548,243 @@
     });
   }
 
+  /* ---------- 演習用の取り込み (間違い + 見直しマーク) ---------- */
+
+  var KEEP = "P,BR,UL,OL,LI,STRONG,B,EM,I,U,CODE,PRE,TABLE,THEAD,TBODY,TR,TH,TD,A,IMG,H1,H2,H3,H4,H5,H6,BLOCKQUOTE,SPAN,DIV,SUB,SUP".split(",");
+  var DROP = "SCRIPT,STYLE,IFRAME,OBJECT,EMBED,SVG,VIDEO,AUDIO,NOSCRIPT,LINK,META,BASE,FORM,INPUT,BUTTON,TEXTAREA,SELECT".split(",");
+
+  /* APIのHTMLを許可リスト方式で作り直す。属性は a[href] / img[src,alt] / セルの結合だけ残す */
+  function cleanHtml(html) {
+    if (!html) return "";
+    var doc = new DOMParser().parseFromString(String(html), "text/html");
+    var out = document.createElement("div");
+    function walk(src, dst) {
+      Array.prototype.slice.call(src.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) {
+          dst.appendChild(document.createTextNode(n.nodeValue));
+          return;
+        }
+        if (n.nodeType !== 1) return;
+        var tag = n.nodeName.toUpperCase();
+        if (DROP.indexOf(tag) >= 0) return;
+        if (KEEP.indexOf(tag) < 0) return walk(n, dst);
+        if (tag === "IMG") {
+          var srcUrl = n.getAttribute("src") || "";
+          if (/display:\s*none/.test(n.getAttribute("style") || "") || !/^https:/.test(srcUrl)) return;
+          var img = document.createElement("img");
+          img.setAttribute("src", srcUrl);
+          img.setAttribute("alt", n.getAttribute("alt") || "");
+          dst.appendChild(img);
+          return;
+        }
+        var el = document.createElement(tag.toLowerCase());
+        if (tag === "A") {
+          var href = n.getAttribute("href") || "";
+          if (/^https?:/.test(href)) {
+            el.setAttribute("href", href);
+            el.setAttribute("target", "_blank");
+            el.setAttribute("rel", "noopener noreferrer");
+          }
+        }
+        if (tag === "TD" || tag === "TH") {
+          ["colspan", "rowspan"].forEach(function (k) {
+            if (/^\d{1,2}$/.test(n.getAttribute(k) || "")) el.setAttribute(k, n.getAttribute(k));
+          });
+        }
+        walk(n, el);
+        dst.appendChild(el);
+      });
+    }
+    walk(doc.body, out);
+    return out.innerHTML;
+  }
+
+  function richQuestion(d, wrong, marked) {
+    var a = d.src || {};
+    var p = a.prompt || {};
+    var fbs = p.feedbacks || [];
+    return {
+      id: a.id,
+      no: d.no,
+      section: a.section ? tidy(a.section) : "",
+      multi: d.multi,
+      bodyHtml: cleanHtml(p.question),
+      choices: (p.answers || []).map(function (h, i) {
+        var l = LETTERS.charAt(i);
+        return {
+          letter: l,
+          html: cleanHtml(h),
+          feedback: cleanHtml(fbs[i]),
+          correct: d.correct.indexOf(l) >= 0,
+          selected: d.selected.indexOf(l) >= 0
+        };
+      }),
+      explanationHtml: cleanHtml(p.explanation),
+      correct: d.correct,
+      selected: d.selected,
+      wrong: wrong,
+      marked: marked
+    };
+  }
+
+  function sleep(ms) {
+    return new Promise(function (r) {
+      setTimeout(r, ms);
+    });
+  }
+
+  /* 見直しマーク・不正解はAPIから確実に取れるか未確認のため、いま開いている画面から読む。
+     テスト画面: 質問一覧(右のパネル)の各項目。結果画面: 全問の一覧と「マーク済み」フィルターで絞った一覧 */
+  function navInfo(items) {
+    var marks = [];
+    var wrongs = [];
+    items.forEach(function (li) {
+      var title = q1(li, ".ud-btn-label");
+      var t = q1(li, '[data-purpose="safely-set-inner-html:question-navigation-item:question"]');
+      var row = q1(li, '[class*="title-row"]');
+      var info = { no: title ? tidy(title.textContent) : "", text: squash(t ? t.textContent : "") };
+      var on =
+        !!q1(li, 'button[aria-label="見直しのマークを外す"]') ||
+        qa(li, "use").some(function (u) {
+          return /icon-saved/.test(u.getAttribute("xlink:href") || u.getAttribute("href") || "");
+        });
+      if (on) marks.push(info);
+      if (row && /不正解|誤答|間違/.test(row.textContent || "")) wrongs.push(info);
+    });
+    return { marks: marks, wrongs: wrongs };
+  }
+
+  function findPill(re) {
+    return qa(document, '[class*="input-pill-module--label"]').filter(function (l) {
+      return re.test(l.textContent || "");
+    })[0];
+  }
+
+  function readPanes() {
+    return qa(document, '[class*="result-pane--question-result-pane--"]').map(function (pane) {
+      var p = q1(pane, '[id="question-prompt"]');
+      var st = q1(pane, '[data-purpose="question-result-header-status-label"]');
+      var m = (pane.textContent || "").match(/問題\d+/);
+      return {
+        no: m ? m[0] : "",
+        text: squash(p ? p.textContent : ""),
+        wrong: !!st && /不正解|誤答|間違/.test(st.textContent || "")
+      };
+    });
+  }
+
+  function infoFromResult() {
+    var markedPill = findPill(/マーク済み/);
+    var allPill = findPill(/すべて/);
+    if (!markedPill) return Promise.resolve({ marks: null, wrongs: [], note: "「マーク済み」フィルターが見つかりません" });
+    if (allPill) allPill.click();
+    return sleep(500)
+      .then(function () {
+        var wrongs = readPanes().filter(function (x) {
+          return x.wrong;
+        });
+        markedPill.click();
+        return sleep(700).then(function () {
+          return { marks: readPanes(), wrongs: wrongs };
+        });
+      })
+      .then(function (r) {
+        if (allPill) allPill.click();
+        return { marks: r.marks, wrongs: r.wrongs, note: "" };
+      });
+  }
+
+  function collectInfo() {
+    var items = qa(document, '[data-purpose="question-navigation-item"]');
+    if (items.length) {
+      var r = navInfo(items);
+      return Promise.resolve({ marks: r.marks, wrongs: r.wrongs, note: "" });
+    }
+    if (/\/result\//.test(location.pathname)) return infoFromResult();
+    return Promise.resolve({
+      marks: null,
+      wrongs: [],
+      note: "質問一覧が見つからないため、見直しマークと画面の不正解は取れません(右の質問一覧パネルを開いて再実行してください)"
+    });
+  }
+
+  function sameHead(x, y) {
+    var n = Math.min(x.length, y.length, 50);
+    return n >= 10 && x.slice(0, n) === y.slice(0, n);
+  }
+  function matchMark(qs, mk) {
+    if (!mk.text) return [];
+    var hits = qs.filter(function (d) {
+      var plain = squash((d.src && d.src.question_plain) || "");
+      return sameHead(plain, mk.text) || sameHead(d.key, mk.text);
+    });
+    if (hits.length > 1 && mk.no) {
+      var byNo = hits.filter(function (d) {
+        return d.no === mk.no;
+      });
+      if (byNo.length) hits = byNo;
+    }
+    return hits.slice(0, 1);
+  }
+
+  function collectPractice() {
+    var quizId = getQuizId();
+    if (!quizId) {
+      return Promise.reject(new Error("URLにクイズIDがありません。/learn/quiz/数字/ のテスト画面か結果画面で実行してください。"));
+    }
+    var attemptId = (location.pathname.match(/\/result\/(\d+)/) || [])[1] || "";
+    return Promise.all([
+      loadApi(quizId, attemptId).then(null, function (e) {
+        return { title: "", questions: [], attempt: null, notes: ["API取得に失敗: " + e.message] };
+      }),
+      collectInfo()
+    ]).then(function (r) {
+      var res = r[0];
+      var mk = r[1];
+      var notes = res.notes.slice();
+      if (mk.note) notes.push(mk.note);
+      function resolveAll(list) {
+        var set = [];
+        var miss = 0;
+        (list || []).forEach(function (m) {
+          var hit = matchMark(res.questions, m);
+          if (hit.length) {
+            if (set.indexOf(hit[0]) < 0) set.push(hit[0]);
+          } else miss++;
+        });
+        return { set: set, miss: miss };
+      }
+      var mkR = resolveAll(mk.marks);
+      var wrR = resolveAll(mk.wrongs);
+      var apiWrong = wrongOf(res.questions);
+      var apiAnswered = res.questions.filter(function (d) {
+        return d.answered;
+      });
+      notes.push(
+        "診断: API 全" + res.questions.length + "問 / 解答あり" + apiAnswered.length + "問 / 誤答" + apiWrong.length +
+          "問、画面 不正解" + (mk.wrongs || []).length + "件(照合" + wrR.set.length + "件)、マーク" +
+          (mk.marks || []).length + "件(照合" + mkR.set.length + "件)"
+      );
+      if (mkR.miss || wrR.miss) notes.push("問題文を照合できなかったもの: マーク" + mkR.miss + "件 / 不正解" + wrR.miss + "件");
+      var out = [];
+      res.questions.forEach(function (d) {
+        var wrong = d.verdict === "誤答" || wrR.set.indexOf(d) >= 0;
+        var marked = mkR.set.indexOf(d) >= 0;
+        if ((wrong || marked) && d.correct.length) out.push(richQuestion(d, wrong, marked));
+      });
+      dropHost();
+      return {
+        quizId: quizId,
+        attemptId: attemptId || (res.attempt && res.attempt.id) || "",
+        from: /\/result\//.test(location.pathname) ? "result" : "test",
+        title: courseTitle() + (res.title ? " / " + res.title : ""),
+        savedAt: Date.now(),
+        questions: out,
+        notes: notes
+      };
+    });
+  }
+
   /* ---------- 公開インターフェース (bridge.js 経由で押下時に呼ばれる) ---------- */
 
   function getQuizId() {
@@ -545,6 +794,7 @@
   window.__tqExtractors = window.__tqExtractors || {};
   window.__tqExtractors.udemy = {
     name: "Udemy",
+    collect: collectPractice,
     /* id: current | wrong | answered | all
        current は画面から、それ以外はAPI(テスト全体)から取る。APIが使えなければ画面の問題で代用 */
     run: function (id, withExp) {

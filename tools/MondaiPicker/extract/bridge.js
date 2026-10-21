@@ -30,4 +30,15 @@
       (e) => ({ error: e && e.message ? e.message : String(e) })
     );
   };
+
+  /* 演習用の取り込み(間違い + 見直しマーク)。結果は {error} か 取り込みデータ */
+  window.__tqCollect = () => {
+    const site = SITES.find((s) => s.re.test(location.hostname));
+    const ex = site && window.__tqExtractors && window.__tqExtractors[site.key];
+    if (!ex || !ex.collect) return Promise.resolve({ error: "このページは演習の取り込みに対応していません(Udemyのテスト/結果画面のみ)" });
+    return ex.collect().then(
+      (r) => r,
+      (e) => ({ error: e && e.message ? e.message : String(e) })
+    );
+  };
 })();
