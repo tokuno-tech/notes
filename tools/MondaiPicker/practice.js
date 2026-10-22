@@ -75,17 +75,33 @@ function renderSetup(set) {
 /* ---------- 出題 ---------- */
 async function runQuiz(set, queue) {
   const hist = await loadHist(set.quizId);
-  const wrongNow = [];
+  const picks = []; // 問題ごとの選択(解答済みのときだけ入る)
   let i = 0;
+
+  const resultOf = (k) => (picks[k] ? sameSet(picks[k], queue[k].correct) : undefined);
+  const finish = () => {
+    const wrongNow = queue.filter((_, k) => resultOf(k) === false);
+    const left = queue.filter((_, k) => !picks[k]).length;
+    if (left && !confirm(`未解答が${left}問あります。結果を見ますか?`)) return;
+    renderSummary(set, queue, wrongNow, left);
+  };
 
   function show() {
     const q = queue[i];
     const need = q.correct.length;
     const multi = need > 1;
     const h = hist[q.id];
+    const chips = queue
+      .map((x, k) => {
+        const r = resultOf(k);
+        const cls = ["chip", k === i ? "cur" : "", r === true ? "ok" : r === false ? "ng" : ""].join(" ");
+        return `<button class="${cls}" data-k="${k}" title="${esc(x.section)}">${esc(x.no.replace(/^問題/, ""))}</button>`;
+      })
+      .join("");
     app.innerHTML = `<div class="sub">${esc(set.title)}</div>
-      <div class="row between"><b>${i + 1} / ${queue.length}</b><button class="danger" id="quit">中断</button></div>
-      <div class="progress"><div style="width:${(i / queue.length) * 100}%"></div></div>
+      <div class="row between"><b>${i + 1} / ${queue.length}</b><span><button id="fin">結果を見る</button> <button class="danger" id="quit">中断</button></span></div>
+      <div class="progress"><div style="width:${(picks.filter(Boolean).length / queue.length) * 100}%"></div></div>
+      <div class="chips">${chips}</div>
       <div class="card">
         <div>${q.wrong ? '<span class="badge ng">前回 誤答</span>' : ""}${q.marked ? '<span class="badge mk">見直しマーク</span>' : ""}
           ${q.section ? `<span class="badge">${esc(q.section)}</span>` : ""}
@@ -95,9 +111,13 @@ async function runQuiz(set, queue) {
         <div class="rich" style="margin:8px 0 12px">${q.bodyHtml}</div>
         <div id="choices"></div>
         <div id="result"></div>
-        <div class="row" style="margin-top:12px"><button class="primary" id="act" disabled>解答する</button></div>
+        <div class="row" style="margin-top:12px"><button id="prev" ${i ? "" : "disabled"}>前へ</button><button class="primary" id="act" disabled>解答する</button></div>
       </div>`;
     app.querySelector("#quit").onclick = () => confirm("中断してホームに戻りますか?") && renderHome();
+    app.querySelector("#fin").onclick = finish;
+    app.querySelectorAll(".chip").forEach((c) => (c.onclick = () => ((i = +c.dataset.k), show())));
+    const cur = app.querySelector(".chip.cur");
+    if (cur) cur.scrollIntoView({ block: "nearest", inline: "center" });
 
     const box = app.querySelector("#choices");
     const inputs = [];
@@ -115,34 +135,46 @@ async function runQuiz(set, queue) {
 
     let revealed = false;
     const isLast = () => i === queue.length - 1;
-    function reveal() {
+    const prev = app.querySelector("#prev");
+    prev.onclick = () => {
+      i--;
+      show();
+    };
+    function reveal(sel, record) {
       revealed = true;
-      const sel = picked();
       const ok = sameSet(sel, q.correct);
-      inputs.forEach((x) => (x.disabled = true));
+      inputs.forEach((x) => {
+        x.disabled = true;
+        x.checked = sel.includes(x.value);
+      });
       box.querySelectorAll(".choice").forEach((lab, k) => {
         const c = q.choices[k];
         if (c.correct) lab.classList.add("correct");
         else if (sel.includes(c.letter)) lab.classList.add("wrong");
-        const fb = lab.querySelector(".fb");
-        if (c.feedback) fb.hidden = false;
+        if (c.feedback) lab.querySelector(".fb").hidden = false;
       });
       app.querySelector("#result").innerHTML = `<div class="verdict ${ok ? "ok" : "ng"}">${ok ? "正解" : "不正解"} (あなた: ${sel.join(",")} / 正解: ${q.correct.join(",")})</div>
         ${q.explanationHtml ? `<div class="expl rich">${q.explanationHtml}</div>` : ""}`;
-      if (!ok) wrongNow.push(q);
-      const r = hist[q.id] || { r: 0, w: 0 };
-      if (ok) r.r++;
-      else r.w++;
-      hist[q.id] = r;
-      saveHist(set.quizId, hist);
+      if (record) {
+        picks[i] = sel;
+        const r = hist[q.id] || { r: 0, w: 0 };
+        if (ok) r.r++;
+        else r.w++;
+        hist[q.id] = r;
+        saveHist(set.quizId, hist);
+        const chip = app.querySelector(".chip.cur");
+        if (chip) chip.classList.add(ok ? "ok" : "ng");
+      }
+      act.disabled = false;
       act.textContent = isLast() ? "結果を見る" : "次へ";
     }
     function next() {
-      if (isLast()) return renderSummary(set, queue, wrongNow);
+      if (isLast()) return finish();
       i++;
       show();
     }
-    act.onclick = () => (revealed ? next() : reveal());
+    act.onclick = () => (revealed ? next() : reveal(picked(), true));
+    if (picks[i]) reveal(picks[i], false); // 解答済みの問題に戻ったときは結果を再表示(履歴には加算しない)
     window.onkeydown = (e) => {
       if (e.target.tagName === "TEXTAREA") return;
       if (e.key === "Enter" && !act.disabled) {
@@ -157,12 +189,12 @@ async function runQuiz(set, queue) {
 }
 
 /* ---------- 結果 ---------- */
-function renderSummary(set, queue, wrongNow) {
+function renderSummary(set, queue, wrongNow, left) {
   window.onkeydown = null;
   const n = queue.length;
-  const ok = n - wrongNow.length;
-  app.innerHTML = `<div class="card"><h2>結果: ${ok} / ${n} 問正解</h2>
-    ${wrongNow.length ? `<p class="sub">間違えた問題</p><ul>${wrongNow.map((q) => `<li>${esc(q.no)} ${esc(q.section)}</li>`).join("")}</ul>` : "<p>全問正解です</p>"}
+  const ok = n - wrongNow.length - left;
+  app.innerHTML = `<div class="card"><h2>結果: ${ok} / ${n} 問正解${left ? `(未解答 ${left}問)` : ""}</h2>
+    ${wrongNow.length ? `<p class="sub">間違えた問題</p><ul>${wrongNow.map((q) => `<li>${esc(q.no)} ${esc(q.section)}</li>`).join("")}</ul>` : left ? "" : "<p>全問正解です</p>"}
     <div class="row"><button class="primary" id="retry" ${wrongNow.length ? "" : "disabled"}>間違えた問題だけもう一度</button>
     <button id="again">設定に戻る</button><button id="home">ホーム</button></div></div>`;
   app.querySelector("#retry").onclick = () => runQuiz(set, shuffle(wrongNow));
